@@ -28,7 +28,9 @@ export function DraftReplyBox({ draftReply, language, fontClass }: DraftReplyBox
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-serif-heading text-lg font-medium">{strings.sectionDraftReply}</h3>
+        <h3 className={`font-serif-heading break-words text-lg font-medium ${fontClass}`}>
+          {strings.sectionDraftReply}
+        </h3>
         <button
           type="button"
           onClick={handleCopy}
@@ -54,7 +56,7 @@ export function DraftReplyBox({ draftReply, language, fontClass }: DraftReplyBox
       </div>
 
       <pre
-        className={`overflow-x-auto whitespace-pre-wrap rounded-[4px] border p-4 text-sm leading-relaxed ${fontClass}`}
+        className={`overflow-x-auto whitespace-pre-wrap break-words rounded-[4px] border p-4 text-sm leading-relaxed ${fontClass}`}
         style={{
           borderColor: 'var(--border-hairline)',
           backgroundColor: 'var(--bg-paper)',

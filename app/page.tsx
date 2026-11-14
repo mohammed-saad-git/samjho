@@ -13,9 +13,10 @@ import { detectPII, redactDocument, SessionVault } from '@/lib/detect';
 import { extractTextFromImage } from '@/lib/extract/ocr';
 import { extractTextFromPdf } from '@/lib/extract/pdf';
 import { getFrontendEnvStatus } from '@/lib/env';
-import { SUPPORTED_LANGUAGES, type LanguageCode } from '@/lib/i18n/languages';
-import { getLLMProvider, type ExplainResponse } from '@/lib/llm';
-import { getPreGeneratedSampleResponse, type SampleDocumentInfo } from '@/lib/samples';
+import { getLanguageConfig, type LanguageCode } from '@/lib/i18n/languages';
+import { UI_TRANSLATIONS } from '@/lib/i18n/translations';
+import { executeExplanationRequest, type ExplainResponse } from '@/lib/llm';
+import { type SampleDocumentInfo } from '@/lib/samples';
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
@@ -48,9 +49,10 @@ export default function HomePage() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [liveAnnouncement, setLiveAnnouncement] = useState('');
 
-  // Sync high-contrast and large-text attributes onto <html>
+  // Sync high-contrast, large-text, and active document language onto <html>
   useEffect(() => {
     const root = document.documentElement;
+    root.lang = targetLanguage;
     if (highContrast) {
       root.setAttribute('data-contrast', 'high');
     } else {
@@ -61,7 +63,7 @@ export default function HomePage() {
     } else {
       root.removeAttribute('data-text-size');
     }
-  }, [highContrast, largeText]);
+  }, [highContrast, largeText, targetLanguage]);
 
   const derived = useMemo(() => {
     if (!originalText) return null;
@@ -237,39 +239,36 @@ export default function HomePage() {
     async (lang: LanguageCode, forceLive = false) => {
       if (!redactionState) return;
       setExplainError(null);
-
-      // Sample fast-path unless the user modified redactions or explicitly requested live AI
-      if (activeSampleId && !hasModifiedRedactions && !forceLive) {
-        const pregen = getPreGeneratedSampleResponse(activeSampleId, lang);
-        if (pregen) {
-          setExplanation(pregen);
-          setResultSource('sample');
-          setLiveAnnouncement(`Loaded pre-generated explanation in ${lang}.`);
-          return;
-        }
-      }
-
+      setExplanation(null);
       setIsExplaining(true);
-      setHasSentToServer(true);
 
-      try {
-        const validated = await getLLMProvider().explain({
-          redactedText: redactionState.redactedText,
-          targetLanguage: lang,
-          ...(documentHint ? { documentHint } : {}),
-        });
-        setExplanation(validated);
+      const outcome = await executeExplanationRequest({
+        redactedText: redactionState.redactedText,
+        targetLanguage: lang,
+        ...(documentHint ? { documentHint } : {}),
+        activeSampleId,
+        hasModifiedRedactions,
+        forceLive,
+      });
+
+      setIsExplaining(false);
+
+      if (outcome.ok) {
+        setExplanation(outcome.explanation);
+        setExplainError(null);
+        setResultSource(outcome.resultSource);
+        setHasSentToServer(outcome.hasSentToServer);
+        setLiveAnnouncement(
+          outcome.resultSource === 'sample'
+            ? `Loaded pre-generated explanation in ${lang}.`
+            : `Explanation ready in ${lang}.`
+        );
+      } else {
+        setExplanation(null);
         setResultSource('live');
-        setLiveAnnouncement(`Explanation ready in ${lang}.`);
-      } catch (err) {
-        const message =
-          err instanceof Error
-            ? err.message
-            : 'Unable to reach the explanation service. Please retry.';
-        setExplainError(message);
-        setLiveAnnouncement(message);
-      } finally {
-        setIsExplaining(false);
+        setHasSentToServer(false);
+        setExplainError(outcome.explainError);
+        setLiveAnnouncement(outcome.explainError);
       }
     },
     [redactionState, activeSampleId, hasModifiedRedactions, documentHint]
@@ -278,7 +277,7 @@ export default function HomePage() {
   const handleLanguageChange = (nextLang: LanguageCode) => {
     setTargetLanguage(nextLang);
     if (explanation) {
-      void runExplanation(nextLang, resultSource === 'live' && !activeSampleId);
+      void runExplanation(nextLang, resultSource === 'live');
     }
   };
 
@@ -298,12 +297,15 @@ export default function HomePage() {
     setLiveAnnouncement('Session cleared. All local identifiers were wiped from memory.');
   };
 
-  const selectedLangConfig = SUPPORTED_LANGUAGES.find((l) => l.code === targetLanguage);
+  const selectedLangConfig = getLanguageConfig(targetLanguage);
+  const strings = UI_TRANSLATIONS[targetLanguage];
   const envStatus = useMemo(() => getFrontendEnvStatus(), []);
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className={`min-h-screen flex flex-col ${selectedLangConfig.fontClass}`}>
       <Header
+        language={targetLanguage}
+        onLanguageChange={handleLanguageChange}
         highContrast={highContrast}
         onHighContrastChange={setHighContrast}
         largeText={largeText}
@@ -338,6 +340,7 @@ export default function HomePage() {
         ) : null}
 
         <DocumentUpload
+          language={targetLanguage}
           isExtracting={isExtracting}
           extractionMessage={extractionMessage}
           extractionProgress={extractionProgress}
@@ -350,6 +353,7 @@ export default function HomePage() {
         {redactionState ? (
           <>
             <PrivacyScoreBar
+              language={targetLanguage}
               beforeScore={redactionState.beforeScore}
               afterScore={redactionState.afterScore}
               findings={redactionState.findings}
@@ -358,6 +362,7 @@ export default function HomePage() {
             />
 
             <SplitWorkspace
+              language={targetLanguage}
               originalText={redactionState.originalText}
               redactedText={redactionState.redactedText}
               allAutoFindings={allAutoFindings}
@@ -368,48 +373,34 @@ export default function HomePage() {
               onToggleManualWord={handleToggleManualWord}
             />
 
-            <FindingsTable findings={redactionState.findings} />
+            <FindingsTable language={targetLanguage} findings={redactionState.findings} />
 
-            {/* Language choice + Confirm action */}
+            {/* Language indicator + Confirm action */}
             <section
               aria-labelledby="explain-controls-heading"
-              className="rounded-[6px] border p-4 sm:p-6"
-              style={{
-                borderColor: 'var(--border-hairline)',
-                backgroundColor: 'var(--bg-surface)',
-              }}
+              className="border-y py-4"
+              style={{ borderColor: 'var(--border-hairline)' }}
             >
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="space-y-2">
-                  <h2 id="explain-controls-heading" className="text-sm font-medium">
-                    Choose explanation language
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-0.5">
+                  <h2
+                    id="explain-controls-heading"
+                    className="text-xs font-medium"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    {strings.chooseLanguageHeading}
                   </h2>
-                  <div className="flex flex-wrap gap-2" role="group" aria-label="Target language">
-                    {SUPPORTED_LANGUAGES.map((lang) => {
-                      const active = lang.code === targetLanguage;
-                      return (
-                        <button
-                          key={lang.code}
-                          type="button"
-                          onClick={() => handleLanguageChange(lang.code)}
-                          aria-pressed={active}
-                          className={`min-h-[44px] rounded-[4px] border px-3.5 py-2 text-sm font-medium transition-colors ${lang.fontClass}`}
-                          style={{
-                            borderColor: active
-                              ? 'var(--accent-protected)'
-                              : 'var(--border-hairline)',
-                            backgroundColor: active ? 'var(--accent-protected)' : 'var(--bg-paper)',
-                            color: active ? '#FFFFFF' : 'var(--text-ink)',
-                          }}
-                        >
-                          {lang.nativeName}
-                          {lang.code !== 'en' ? (
-                            <span className="ml-1.5 text-xs opacity-80">{lang.englishName}</span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <p className={`text-sm font-medium ${selectedLangConfig.fontClass}`}>
+                    {selectedLangConfig.nativeName}
+                    {selectedLangConfig.code !== 'en' ? (
+                      <span
+                        className="ml-1.5 text-xs font-normal"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        ({selectedLangConfig.englishName})
+                      </span>
+                    ) : null}
+                  </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -417,7 +408,7 @@ export default function HomePage() {
                     type="button"
                     disabled={isExplaining}
                     onClick={() => void runExplanation(targetLanguage)}
-                    className="inline-flex min-h-[44px] items-center gap-2 rounded-[4px] px-5 py-2.5 text-sm font-medium transition-opacity disabled:opacity-60"
+                    className={`inline-flex min-h-[44px] items-center gap-2 rounded-[4px] px-5 py-2.5 text-sm font-medium transition-opacity disabled:opacity-60 ${selectedLangConfig.fontClass}`}
                     style={{
                       backgroundColor: 'var(--accent-protected)',
                       color: '#FFFFFF',
@@ -425,8 +416,8 @@ export default function HomePage() {
                   >
                     <span>
                       {isExplaining
-                        ? 'Explaining document…'
-                        : `Confirm & explain in ${selectedLangConfig?.englishName ?? 'English'}`}
+                        ? strings.explainingButton
+                        : `${strings.confirmExplainPrefix} ${selectedLangConfig.nativeName}`}
                     </span>
                     <ArrowRight className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
                   </button>
@@ -436,7 +427,7 @@ export default function HomePage() {
               {explainError ? (
                 <div
                   role="alert"
-                  className="mt-4 flex flex-col gap-3 rounded-[4px] border p-3.5 text-sm sm:flex-row sm:items-center sm:justify-between"
+                  className="mt-4 flex flex-col gap-3 border-l-2 py-2.5 pl-4 pr-3 text-sm sm:flex-row sm:items-center sm:justify-between"
                   style={{
                     borderColor: 'var(--risk-high)',
                     backgroundColor: 'var(--risk-high-surface)',
@@ -455,13 +446,13 @@ export default function HomePage() {
                     }}
                   >
                     <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-                    <span>Retry</span>
+                    <span>{strings.retryButton}</span>
                   </button>
                 </div>
               ) : null}
             </section>
 
-            {explanation && derived ? (
+            {explanation && !explainError && derived ? (
               <ExplanationResults
                 explanation={explanation}
                 vault={derived.vault}
@@ -488,7 +479,7 @@ export default function HomePage() {
       </main>
 
       <footer
-        className="border-t px-4 py-4 text-xs sm:px-6"
+        className={`border-t px-4 py-4 text-xs sm:px-6 ${selectedLangConfig.fontClass}`}
         style={{
           borderColor: 'var(--border-hairline)',
           color: 'var(--text-muted)',
@@ -496,10 +487,9 @@ export default function HomePage() {
       >
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2">
           <span>
-            Samjho · Identifiers stay in browser memory for this session only (
-            {documentName ?? 'no document loaded'}).
+            {strings.footerSessionPrefix} ({documentName ?? strings.footerNoDocLoaded}).
           </span>
-          <span className="font-mono-code">No localStorage · No analytics · No tracking</span>
+          <span>{strings.footerPrivacySummary}</span>
         </div>
       </footer>
     </div>

@@ -11,7 +11,8 @@ export interface LLMProvider {
 export async function withRetry<T>(
   operation: () => Promise<T>,
   maxRetries = 1,
-  backoffMs = 800
+  backoffMs = 800,
+  shouldRetry: (error: unknown) => boolean = () => true
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -19,9 +20,13 @@ export async function withRetry<T>(
       return await operation();
     } catch (error) {
       lastError = error;
-      if (attempt < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, backoffMs * (attempt + 1)));
+      if (attempt < maxRetries && shouldRetry(error)) {
+        if (backoffMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, backoffMs * (attempt + 1)));
+        }
+        continue;
       }
+      break;
     }
   }
   throw lastError instanceof Error ? lastError : new Error('LLM request failed after retry');

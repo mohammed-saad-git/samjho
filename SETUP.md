@@ -20,13 +20,13 @@ Follow this checklist from top to bottom. Never paste real keys into chat, commi
 
 ## 2. Where to Get Every Value & Where to Put It
 
-| Variable                        | Where to get it                                                                                                                                                                                                                             | Where to put it                                                          | Visibility         |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------ |
-| `NEXT_PUBLIC_SUPABASE_URL`      | **Supabase Dashboard** -> **Project Settings** -> **API** (or **Data API**) -> **Project URL** (`https://<project-ref>.supabase.co`)                                                                                                        | `.env.local` AND **Vercel -> Project Settings -> Environment Variables** | Public by design   |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **Supabase Dashboard** -> **Project Settings** -> **API Keys** -> **anon public** key (note: with `verify_jwt = true`, use the JWT-based `anon` key shown under Legacy API Keys / Project API Keys)                                         | `.env.local` AND **Vercel -> Project Settings -> Environment Variables** | Public by design   |
-| `GEMINI_API_KEY`                | **Google AI Studio** (`https://aistudio.google.com/apikey`) -> **Create API key**                                                                                                                                                           | **Supabase Edge Function Secrets ONLY** (`npx supabase secrets set ...`) | Server secret ONLY |
-| `GEMINI_MODEL`                  | Official Flash model ID from Google Gemini API docs (`gemini-3.8-flash`)                                                                                                                                                                    | **Supabase Edge Function Secrets ONLY** (`npx supabase secrets set ...`) | Server config ONLY |
-| `ALLOWED_ORIGIN`                | Your deployed Vercel URL (`https://<your-app>.vercel.app`; localhost is allowed automatically during local dev, or use comma-separated `https://<your-app>.vercel.app,http://localhost:3000` if testing locally against the cloud function) | **Supabase Edge Function Secrets ONLY** (`npx supabase secrets set ...`) | Server config ONLY |
+| Variable                        | Where to get it                                                                                                                                                                                                                                  | Where to put it                                                          | Visibility         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`      | **Supabase Dashboard** -> **Project Settings** -> **API** (or **Data API**) -> **Project URL** (`https://wsdgfqqerdeptjjcamop.supabase.co`)                                                                                                      | `.env.local` AND **Vercel -> Project Settings -> Environment Variables** | Public by design   |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | **Supabase Dashboard** -> **Project Settings** -> **API Keys** -> **Publishable key** (`sb_publishable_...`; sent in the `apikey` header only while the Edge Function validates it against Supabase's auto-injected `SUPABASE_PUBLISHABLE_KEYS`) | `.env.local` AND **Vercel -> Project Settings -> Environment Variables** | Public by design   |
+| `GEMINI_API_KEY`                | **Google AI Studio** (`https://aistudio.google.com/apikey`) -> **Create API key**                                                                                                                                                                | **Supabase Edge Function Secrets ONLY** (`npx supabase secrets set ...`) | Server secret ONLY |
+| `GEMINI_MODEL`                  | Official Flash model ID from Google Gemini API docs (`gemini-3.8-flash`)                                                                                                                                                                         | **Supabase Edge Function Secrets ONLY** (`npx supabase secrets set ...`) | Server config ONLY |
+| `ALLOWED_ORIGIN`                | Your deployed Vercel URL (`https://<your-app>.vercel.app`; localhost is allowed automatically during local dev, or use comma-separated `https://<your-app>.vercel.app,http://localhost:3000` if testing locally against the cloud function)      | **Supabase Edge Function Secrets ONLY** (`npx supabase secrets set ...`) | Server config ONLY |
 
 > **Security rule:** Do **not** copy or set `SUPABASE_SERVICE_ROLE_KEY` anywhere in this repository, `.env.local`, or Vercel. Samjho stores zero documents, zero extracted text, and zero LLM outputs in any database, so no service role key is needed.
 
@@ -34,7 +34,7 @@ Follow this checklist from top to bottom. Never paste real keys into chat, commi
 
 ## 3. Configure Local Frontend `.env.local`
 
-- [ ] Copy `.env.example` to `.env.local`:
+- [ ] Copy `.env.example` to `.env.local` (contains ONLY the two public `NEXT_PUBLIC_` variables—never put `GEMINI_API_KEY` here):
   ```bash
   cp .env.example .env.local
   ```
@@ -50,22 +50,26 @@ Follow this checklist from top to bottom. Never paste real keys into chat, commi
 
 ---
 
-## 4. Deploy Backend to Supabase Edge Functions
+## 4. Backend secrets & Deploy Edge Function
 
-`supabase/config.toml` already sets `[functions.explain]` with `verify_jwt = true`.
-`supabase/functions/explain/index.ts` imports `lib/detect/index.ts` directly, so deploy with `--use-api` (Supabase CLI v2.13.3+ server-side bundling, no code duplication or Docker required):
+Do **not** use `supabase functions serve` unless Docker is available. Default to testing directly against your deployed Edge Function via `npm run smoke:live`.
 
-- [ ] Initialize Supabase workspace (already committed in `supabase/config.toml`; skip if reusing existing config):
+`supabase/config.toml` sets `[functions.explain]` with `verify_jwt = false` because modern `sb_publishable_...` keys are non-JWT API keys sent in the `apikey` header only (never in `Authorization: Bearer`). Inside `supabase/functions/explain/index.ts`, every request's `apikey` header is verified against Supabase's auto-injected `SUPABASE_PUBLISHABLE_KEYS` alongside Origin CORS, best-effort per-IP rate limiting, payload caps, and the 422 PII guard. Do **not** set `SUPABASE_PUBLISHABLE_KEYS` manually via `supabase secrets set` (the `SUPABASE_` prefix is reserved by Supabase).
+`supabase/functions/explain/index.ts` imports `lib/detect/index.ts` directly, so deploy with `--use-api` (no code duplication or Docker required):
+
+### Backend secrets
+
+- [ ] Link your Supabase project (`wsdgfqqerdeptjjcamop` for this project, or your Supabase Dashboard URL project ref):
   ```bash
-  npx supabase init
+  npx supabase link --project-ref wsdgfqqerdeptjjcamop
   ```
-- [ ] Link your Supabase project (`<project-ref>` is in your Supabase Dashboard URL):
+- [ ] Copy `supabase/functions/.env.example` to `supabase/functions/.env` and paste your key from Google AI Studio (`https://aistudio.google.com/apikey`) into it (never include `ENVIRONMENT=development` in this file):
   ```bash
-  npx supabase link --project-ref <your-project-ref>
+  cp supabase/functions/.env.example supabase/functions/.env
   ```
-- [ ] Set the three backend-only secrets on Supabase (never in `.env.local` or Vercel):
+- [ ] Upload the backend secrets to Supabase (delete `supabase/functions/.env` afterwards or keep it gitignored—the Gemini key is **never** needed in Vercel or `.env.local`):
   ```bash
-  npx supabase secrets set GEMINI_API_KEY=<your-gemini-api-key> GEMINI_MODEL=gemini-3.8-flash ALLOWED_ORIGIN=https://<your-app>.vercel.app
+  npx supabase secrets set --env-file supabase/functions/.env
   ```
 - [ ] Deploy the Edge Function:
   ```bash
@@ -74,13 +78,17 @@ Follow this checklist from top to bottom. Never paste real keys into chat, commi
 
 ---
 
-## 5. Refresh Pre-Generated Sample Fixtures via Deployed Function
+## 5. Run Live Smoke Test & Generate Sample Fixtures
 
-- [ ] Once both `.env.local` and the Supabase Edge Function are live, regenerate `fixtures/sample-responses.json` through the real Edge Function pipeline:
+- [ ] With `.env.local` configured and the Edge Function deployed, verify negative security guards (`422` / `403`) and live English + Kannada explanations:
+  ```bash
+  npm run smoke:live
+  ```
+- [ ] Regenerate `fixtures/sample-responses.json` directly from the deployed Edge Function and commit it:
   ```bash
   npm run generate:samples
   ```
-- [ ] (Optional offline check only updates PDF/PNG fixtures without network calls):
+- [ ] (Optional offline check only updates PDF/PNG fixtures without touching `fixtures/sample-responses.json`):
   ```bash
   npm run generate:samples -- --docs-only
   ```
@@ -92,13 +100,15 @@ Follow this checklist from top to bottom. Never paste real keys into chat, commi
 - [ ] In **Vercel Dashboard -> Project Settings -> Environment Variables** (or via `npx vercel env add`), add ONLY:
   - `NEXT_PUBLIC_SUPABASE_URL`
   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+    _(The Gemini key is **never** needed in Vercel.)_
 - [ ] Deploy production build:
   ```bash
   npx vercel --prod
   ```
-- [ ] Confirm `ALLOWED_ORIGIN` in Supabase matches your exact Vercel production URL (no trailing slash). If your assigned Vercel domain changed after first deploy, update it immediately:
+- [ ] Lock `ALLOWED_ORIGIN` in Supabase to your exact Vercel production URL (no trailing slash) and re-run `smoke:live`:
   ```bash
   npx supabase secrets set ALLOWED_ORIGIN=https://<your-final-vercel-domain>.vercel.app
+  SMOKE_ORIGIN=https://<your-final-vercel-domain>.vercel.app npm run smoke:live
   ```
 
 ---

@@ -8,7 +8,7 @@ const repoRoot = process.cwd();
 const SECRET_PATTERNS = [
   {
     name: 'Google / Gemini API key',
-    regex: /\bAIza[0-9A-Za-z_-]{30,}\b/g,
+    regex: /AIza[0-9A-Za-z_-]{35}/g,
   },
   {
     name: 'Supabase secret key',
@@ -24,7 +24,7 @@ const SECRET_PATTERNS = [
   },
   {
     name: 'Hardcoded GEMINI_API_KEY assignment',
-    regex: /\bGEMINI_API_KEY\s*[:=]\s*['"]?(?!<|your-|placeholder|\$\{)[A-Za-z0-9_-]{12,}/g,
+    regex: /\bGEMINI_API_KEY[ \t]*[:=][ \t]*['"]?(?!<|your-|placeholder|\$\{)[A-Za-z0-9_-]{12,}/g,
   },
 ];
 
@@ -45,7 +45,14 @@ function getFilesToScan() {
     const trackedOrWork = execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' });
     const trackedEnv = stagedOnly
       ? ''
-      : execFileSync('git', ['ls-files', '.env', '.env.*'], { cwd: repoRoot, encoding: 'utf8' });
+      : execFileSync(
+          'git',
+          ['ls-files', '.env', '.env.*', 'supabase/functions/.env', 'supabase/**/.env*'],
+          {
+            cwd: repoRoot,
+            encoding: 'utf8',
+          }
+        );
     const all = new Set(
       `${trackedOrWork}\n${trackedEnv}`
         .split(/\r?\n/)
@@ -64,12 +71,11 @@ function main() {
 
   for (const relPath of files) {
     const normalized = relPath.replace(/\\/g, '/');
+    const baseName = path.basename(normalized);
+    const isExampleEnv = baseName === '.env.example' || baseName.endsWith('.env.example');
+    const isEnvFile = baseName === '.env' || baseName.startsWith('.env.');
 
-    if (
-      normalized === '.env' ||
-      normalized === '.env.local' ||
-      (normalized.startsWith('.env.') && normalized !== '.env.example')
-    ) {
+    if (isEnvFile && !isExampleEnv) {
       violations.push(`${normalized}: real env file must never be staged or tracked in git`);
       continue;
     }

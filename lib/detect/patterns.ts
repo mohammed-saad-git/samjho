@@ -248,13 +248,30 @@ function detectAddresses(text: string): CandidateMatch[] {
 
   // 1. Labeled address blocks (single-line or multi-line ending at next label or PIN code)
   const labeledRegex =
-    /\b(?:Residential\s+Address|Billing\s+Address|Property\s+Address|Registered\s+Address|Postal\s+Address|Correspondence\s+Address|Premises\s+Address|Address|Residing\s+at|Premises|R\/o)\s*[:\-]\s*([^\n]+(?:\n(?![A-Za-z][A-Za-z\s/]{1,28}:)[^\n]{2,110})*)/gi;
+    /\b(?:Residential\s+Address|Billing\s+Address|Property\s+Address|Registered\s+Address|Postal\s+Address|Correspondence\s+Address|Premises\s+Address|Address|Residing\s+at|Premises|R\/o)\s*[:\-]\s*([^\n]+(?:\n(?![A-Za-z][A-Za-z\s/]{1,28}:)[^\n]{2,110}){0,2})/gi;
 
   let match: RegExpExecArray | null;
   while ((match = labeledRegex.exec(text)) !== null) {
     const rawGroup = match[1];
     if (!rawGroup) continue;
-    const trimmed = rawGroup.trimEnd();
+    const rawLines = rawGroup.split('\n');
+    const keptLines: string[] = [];
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i]!;
+      if (
+        i > 0 &&
+        /^\s*(?:[-=_]{3,}|\d+[.)]\s|Dear\b|Sub(?:ject)?\b|Ref\b|Notice\b|Clause\b|Schedule\b|WHEREAS\b|NOW\s+THIS\b|BILLING\b|LOAN\b|IMPORTANT\b|Total\b|Amount\b|Date\b)/i.test(
+          line
+        )
+      ) {
+        break;
+      }
+      keptLines.push(line);
+      if (/\b[1-9]\d{5}\b/.test(line)) {
+        break;
+      }
+    }
+    const trimmed = keptLines.join('\n').trimEnd();
     const hasPin = /\b[1-9]\d{5}\b/.test(trimmed);
     const hasAddressHint =
       /\b(?:Flat|House|H\.?\s*No|Door|Plot|Road|Rd|Street|St|Lane|Nagar|Colony|Layout|Sector|Phase|Block|Floor|Apt|Apartment|Cross|Main|Marg|Vihar|Puram|Pincode|PIN)\b/i.test(

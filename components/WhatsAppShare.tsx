@@ -11,9 +11,15 @@ interface WhatsAppShareProps {
   rawRedactedExplanation: ExplainResponse;
   vault: SessionVault;
   language: LanguageCode;
+  note?: string;
 }
 
-export function WhatsAppShare({ rawRedactedExplanation, vault, language }: WhatsAppShareProps) {
+export function WhatsAppShare({
+  rawRedactedExplanation,
+  vault,
+  language,
+  note,
+}: WhatsAppShareProps) {
   const strings = UI_TRANSLATIONS[language];
   const shareHref = buildWhatsAppShareUrl(rawRedactedExplanation, vault);
 
@@ -30,11 +36,11 @@ export function WhatsAppShare({ rawRedactedExplanation, vault, language }: Whats
           color: 'var(--accent-protected)',
         }}
       >
-        <Share2 className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />
+        <Share2 className="h-4 w-4 shrink-0" strokeWidth={1.5} aria-hidden="true" />
         <span>{strings.shareWhatsappLabel}</span>
       </a>
-      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-        Includes only the summary, amounts, and next steps. Never includes redacted identifiers.
+      <p className="text-xs break-words" style={{ color: 'var(--text-muted)' }}>
+        {note ?? strings.whatsappNote}
       </p>
     </div>
   );

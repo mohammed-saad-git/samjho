@@ -52,6 +52,8 @@ export const SUPPORTED_LANGUAGES: readonly LanguageConfig[] = [
   },
 ];
 
+export const HEADER_LANGUAGE_ORDER: readonly LanguageCode[] = ['hi', 'kn', 'ta', 'te', 'en'];
+
 export function getLanguageConfig(code: LanguageCode): LanguageConfig {
   return SUPPORTED_LANGUAGES.find((l) => l.code === code) ?? SUPPORTED_LANGUAGES[0]!;
 }

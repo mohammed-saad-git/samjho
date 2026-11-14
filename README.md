@@ -14,8 +14,8 @@ flowchart LR
   EX --> DET["On-Device Detector (lib/detect: Verhoeff, Regex, Honorifics)"]
   DET --> VAULT["In-Memory SessionVault (never persisted)"]
   DET --> SPLIT["Interactive Split View & Computed Privacy Score"]
-  SPLIT -->|Redacted text + Bearer anon key| EDGE["Supabase Edge Function: POST /functions/v1/explain"]
-  EDGE --> CORS{"Origin Check (ALLOWED_ORIGIN) & verify_jwt"}
+  SPLIT -->|Redacted text + apikey header| EDGE["Supabase Edge Function: POST /functions/v1/explain"]
+  EDGE --> CORS{"Origin Check (ALLOWED_ORIGIN) & apikey Check"}
   CORS --> GUARD{"Server Defense-in-Depth (lib/detect -> 422 on Aadhaar/PAN/Phone/Email)"}
   GUARD -->|Clean| LLM["Gemini Flash REST API (GEMINI_MODEL secret)"]
   GUARD -->|Leaked PII| BLOCK["HTTP 422 Blocked"]
@@ -41,7 +41,7 @@ flowchart LR
 - **Postal addresses:** Labeled address lines or lines ending in 6-digit Indian PIN codes.
 - **Person names:** Heuristic detection via labeled fields (`Consumer Name:`, `Borrower:`), salutations, and Indian/English honorifics (`Shri`, `Smt.`, `Mr.`, `Ms.`, `Dr.`), plus click-to-toggle on any word in the original text.
 - **Defense in depth:** `supabase/functions/explain` imports the exact same `lib/detect` pure TypeScript module (`../../../lib/detect/index.ts`) and returns **HTTP 422** if an unredacted Aadhaar, PAN, phone number, or email is present. Request bodies are never logged or stored.
-- **Strict CORS & JWT check:** `verify_jwt = true` in `supabase/config.toml`; preflight `OPTIONS` and `POST` requests allow only `ALLOWED_ORIGIN` (plus localhost in local dev).
+- **Strict CORS, publishable key check & rate limit:** `[functions.explain]` sets `verify_jwt = false` in `supabase/config.toml` for `sb_publishable_` keys; every `POST` validates the `apikey` header against Supabase's auto-injected `SUPABASE_PUBLISHABLE_KEYS`, restricts `ALLOWED_ORIGIN` CORS, and enforces best-effort per-IP in-memory rate limiting.
 - **Ephemeral memory vault:** `SessionVault` lives strictly in JavaScript memory (no `localStorage`, no `sessionStorage`, no cookies, no analytics) and is cleared on **Clear session** and `beforeunload`/`pagehide`.
 - **Safe WhatsApp share:** `wa.me` share links contain only document type, scrubbed summary, amounts, and next steps — never vault values or placeholder tokens.
 

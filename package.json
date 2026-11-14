@@ -2,6 +2,9 @@
   "name": "hackathon",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "node scripts/copy-pdf-worker.mjs && next build",
@@ -13,6 +16,7 @@
     "format": "prettier --write .",
     "postinstall": "node scripts/copy-pdf-worker.mjs",
     "generate:samples": "tsx scripts/generate-samples.ts",
+    "smoke:live": "tsx scripts/smoke-live.ts",
     "check:secrets": "node scripts/check-secrets.mjs"
   },
   "dependencies": {

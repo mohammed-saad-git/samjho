@@ -62,44 +62,41 @@ export function ExplanationResults({
   return (
     <article
       aria-labelledby="explanation-heading"
-      className="rounded-[6px] border"
-      style={{
-        borderColor: 'var(--border-hairline)',
-        backgroundColor: 'var(--bg-surface)',
-      }}
+      className={`divide-y border-y ${langConfig.fontClass}`}
+      style={{ borderColor: 'var(--border-hairline)' }}
     >
-      {/* Header bar */}
+      {/* Header band */}
       <div
-        className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between sm:px-6"
+        className="flex flex-col gap-3 py-5 sm:flex-row sm:items-center sm:justify-between"
         style={{ borderColor: 'var(--border-hairline)' }}
       >
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <span
               className="rounded-[3px] border px-2 py-0.5 font-mono-code text-xs"
               style={{
                 borderColor: 'var(--border-hairline)',
-                backgroundColor: 'var(--bg-paper)',
+                backgroundColor: 'var(--bg-surface)',
                 color: 'var(--text-muted)',
               }}
             >
-              {sourceKind === 'sample' ? 'sample, pre-generated' : 'live AI response'}
+              {sourceKind === 'sample' ? strings.sampleTag : strings.liveTag}
             </span>
             {sourceKind === 'sample' && onRequestLiveRun ? (
               <button
                 type="button"
                 disabled={isLoadingLive}
                 onClick={onRequestLiveRun}
-                className="min-h-[32px] font-mono-code text-xs underline underline-offset-4 disabled:opacity-50"
+                className={`inline-flex min-h-[44px] items-center px-2 text-xs font-medium underline underline-offset-4 disabled:opacity-50 ${langConfig.fontClass}`}
                 style={{ color: 'var(--accent-protected)' }}
               >
-                {isLoadingLive ? 'Running live AI…' : 'Run live API instead'}
+                {isLoadingLive ? strings.runningLiveApiLabel : strings.runLiveApiLabel}
               </button>
             ) : null}
           </div>
           <h2
             id="explanation-heading"
-            className={`font-serif-heading text-2xl font-medium ${langConfig.fontClass}`}
+            className={`font-serif-heading break-words text-2xl font-medium ${langConfig.fontClass}`}
           >
             {displayDocType}
           </h2>
@@ -107,186 +104,183 @@ export function ExplanationResults({
 
         <label
           htmlFor="switch-rehydrate"
-          className="flex min-h-[44px] cursor-pointer items-center gap-2.5 self-start rounded-[4px] border px-3 py-1.5 text-xs font-medium sm:self-auto"
-          style={{
-            borderColor: 'var(--border-hairline)',
-            backgroundColor: 'var(--bg-paper)',
-          }}
+          className="flex min-h-[44px] cursor-pointer items-center gap-2.5 self-start text-xs font-medium sm:self-auto"
         >
-          <span>Show real details locally</span>
+          <span>{strings.showRealDetailsLabel}</span>
           <Switch.Root
             id="switch-rehydrate"
             checked={showRealDetails}
             onCheckedChange={onShowRealDetailsChange}
             className="samjho-switch-root"
-            aria-label="Toggle local restoration of redacted identifiers"
+            aria-label={strings.showRealDetailsLabel}
           >
             <Switch.Thumb className="samjho-switch-thumb" />
           </Switch.Root>
         </label>
       </div>
 
-      {/* Reading-order content sections */}
-      <div className="divide-y" style={{ borderColor: 'var(--border-hairline)' }}>
-        {/* 1. Plain-language summary + Audio */}
-        <section className="space-y-3 p-4 sm:p-6" style={{ borderColor: 'var(--border-hairline)' }}>
-          <h3 className={`font-serif-heading text-lg font-medium ${langConfig.fontClass}`}>
-            {strings.sectionSummary}
-          </h3>
-          <AudioReader text={displaySummary} language={language} />
-        </section>
-
-        {/* 2. Key Facts */}
-        {displayKeyFacts.length > 0 ? (
-          <section
-            className="space-y-3 p-4 sm:p-6"
-            style={{ borderColor: 'var(--border-hairline)' }}
-          >
-            <h3 className={`font-serif-heading text-lg font-medium ${langConfig.fontClass}`}>
-              {strings.sectionKeyFacts}
-            </h3>
-            <dl
-              className="grid grid-cols-1 divide-y rounded-[4px] border sm:grid-cols-2 sm:divide-x sm:divide-y-0"
-              style={{
-                borderColor: 'var(--border-hairline)',
-                backgroundColor: 'var(--bg-paper)',
-              }}
-            >
-              {displayKeyFacts.map((fact, idx) => (
-                <div
-                  key={`${fact.label}-${idx}`}
-                  className="border-b px-4 py-2.5 last:border-b-0 sm:border-b"
-                  style={{ borderColor: 'var(--border-hairline)' }}
-                >
-                  <dt className="font-mono-code text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {fact.label}
-                  </dt>
-                  <dd className={`mt-0.5 text-sm font-medium ${langConfig.fontClass}`}>
-                    {fact.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        ) : null}
-
-        {/* 3. Amounts & Deadlines */}
-        <section
-          className="grid grid-cols-1 gap-6 p-4 sm:p-6 md:grid-cols-2"
-          style={{ borderColor: 'var(--border-hairline)' }}
+      {/* 1. Plain-language summary + Audio */}
+      <section className="space-y-3 py-5" style={{ borderColor: 'var(--border-hairline)' }}>
+        <h3
+          className={`font-serif-heading break-words text-lg font-medium ${langConfig.fontClass}`}
         >
-          <div>
-            <h3 className={`font-serif-heading text-lg font-medium ${langConfig.fontClass}`}>
-              {strings.sectionAmounts}
-            </h3>
-            {displayAmounts.length === 0 ? (
-              <p className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                No monetary amounts mentioned.
-              </p>
-            ) : (
-              <ul className="mt-2.5 space-y-2">
-                {displayAmounts.map((item, idx) => (
-                  <li
-                    key={idx}
-                    className="rounded-[4px] border px-3.5 py-2.5"
-                    style={{
-                      borderColor: 'var(--border-hairline)',
-                      backgroundColor: 'var(--bg-paper)',
-                    }}
-                  >
-                    <div className="font-mono-code text-sm font-medium">{item.value}</div>
-                    <div className={`mt-0.5 text-sm ${langConfig.fontClass}`}>{item.what}</div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          {strings.sectionSummary}
+        </h3>
+        <AudioReader text={displaySummary} language={language} />
+      </section>
 
-          <div>
-            <h3 className={`font-serif-heading text-lg font-medium ${langConfig.fontClass}`}>
-              {strings.sectionDeadlines}
-            </h3>
-            {displayDeadlines.length === 0 ? (
-              <p className="mt-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-                No specific deadlines found.
-              </p>
-            ) : (
-              <ul className="mt-2.5 space-y-2">
-                {displayDeadlines.map((item, idx) => (
-                  <li
-                    key={idx}
-                    className="rounded-[4px] border px-3.5 py-2.5"
-                    style={{
-                      borderColor: 'var(--border-hairline)',
-                      backgroundColor: 'var(--bg-paper)',
-                    }}
-                  >
-                    <div
-                      className="font-mono-code text-xs font-medium"
-                      style={{ color: 'var(--risk-medium)' }}
-                    >
-                      {item.date}
-                    </div>
-                    <div className={`mt-0.5 text-sm ${langConfig.fontClass}`}>{item.what}</div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
-
-        {/* 4. Watch Outs */}
-        {displayWatchOuts.length > 0 ? (
-          <section
-            className="space-y-2.5 p-4 sm:p-6"
-            style={{ borderColor: 'var(--border-hairline)' }}
+      {/* 2. Key Facts (flat hairline rows, zero nested borders or odd blank blocks) */}
+      {displayKeyFacts.length > 0 ? (
+        <section className="space-y-3 py-5" style={{ borderColor: 'var(--border-hairline)' }}>
+          <h3
+            className={`font-serif-heading break-words text-lg font-medium ${langConfig.fontClass}`}
           >
-            <h3 className={`font-serif-heading text-lg font-medium ${langConfig.fontClass}`}>
-              {strings.sectionWatchOuts}
-            </h3>
-            <ul className={`list-disc space-y-1.5 pl-5 text-sm ${langConfig.fontClass}`}>
-              {displayWatchOuts.map((item, idx) => (
-                <li key={idx}>{item}</li>
+            {strings.sectionKeyFacts}
+          </h3>
+          <dl className="grid grid-cols-1 sm:grid-cols-2 sm:gap-x-8">
+            {displayKeyFacts.map((fact, idx) => (
+              <div
+                key={`${fact.label}-${idx}`}
+                className="border-b py-2.5"
+                style={{ borderColor: 'var(--border-hairline)' }}
+              >
+                <dt
+                  className={`break-words text-xs font-medium ${langConfig.fontClass}`}
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  {fact.label}
+                </dt>
+                <dd className={`mt-0.5 break-words text-sm font-medium ${langConfig.fontClass}`}>
+                  {fact.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+
+      {/* 3. Amounts & Deadlines */}
+      <section
+        className="grid grid-cols-1 gap-8 py-5 md:grid-cols-2"
+        style={{ borderColor: 'var(--border-hairline)' }}
+      >
+        <div className="min-w-0">
+          <h3
+            className={`font-serif-heading break-words text-lg font-medium ${langConfig.fontClass}`}
+          >
+            {strings.sectionAmounts}
+          </h3>
+          {displayAmounts.length === 0 ? (
+            <p className="mt-2 text-sm break-words" style={{ color: 'var(--text-muted)' }}>
+              {strings.noAmountsFound}
+            </p>
+          ) : (
+            <ul
+              className="mt-2.5 divide-y border-t"
+              style={{ borderColor: 'var(--border-hairline)' }}
+            >
+              {displayAmounts.map((item, idx) => (
+                <li key={idx} className="py-2.5" style={{ borderColor: 'var(--border-hairline)' }}>
+                  <div className="break-words text-sm font-semibold tabular-nums">{item.value}</div>
+                  <div className={`mt-0.5 break-words text-sm ${langConfig.fontClass}`}>
+                    {item.what}
+                  </div>
+                </li>
               ))}
             </ul>
-          </section>
-        ) : null}
+          )}
+        </div>
 
-        {/* 5. Next Steps */}
-        {displayNextSteps.length > 0 ? (
-          <section
-            className="space-y-2.5 p-4 sm:p-6"
-            style={{ borderColor: 'var(--border-hairline)' }}
+        <div className="min-w-0">
+          <h3
+            className={`font-serif-heading break-words text-lg font-medium ${langConfig.fontClass}`}
           >
-            <h3 className={`font-serif-heading text-lg font-medium ${langConfig.fontClass}`}>
-              {strings.sectionNextSteps}
-            </h3>
-            <ol className={`list-decimal space-y-2 pl-5 text-sm ${langConfig.fontClass}`}>
-              {displayNextSteps.map((step, idx) => (
-                <li key={idx}>{step}</li>
+            {strings.sectionDeadlines}
+          </h3>
+          {displayDeadlines.length === 0 ? (
+            <p className="mt-2 text-sm break-words" style={{ color: 'var(--text-muted)' }}>
+              {strings.noDeadlinesFound}
+            </p>
+          ) : (
+            <ul
+              className="mt-2.5 divide-y border-t"
+              style={{ borderColor: 'var(--border-hairline)' }}
+            >
+              {displayDeadlines.map((item, idx) => (
+                <li key={idx} className="py-2.5" style={{ borderColor: 'var(--border-hairline)' }}>
+                  <div
+                    className="break-words text-xs font-semibold tabular-nums"
+                    style={{ color: 'var(--risk-medium)' }}
+                  >
+                    {item.date}
+                  </div>
+                  <div className={`mt-0.5 break-words text-sm ${langConfig.fontClass}`}>
+                    {item.what}
+                  </div>
+                </li>
               ))}
-            </ol>
-          </section>
-        ) : null}
+            </ul>
+          )}
+        </div>
+      </section>
 
-        {/* 6. Draft Reply */}
-        <section className="p-4 sm:p-6" style={{ borderColor: 'var(--border-hairline)' }}>
-          <DraftReplyBox
-            draftReply={displayDraftReply}
-            language={language}
-            fontClass={langConfig.fontClass}
-          />
+      {/* 4. Watch Outs */}
+      {displayWatchOuts.length > 0 ? (
+        <section className="space-y-2.5 py-5" style={{ borderColor: 'var(--border-hairline)' }}>
+          <h3
+            className={`font-serif-heading break-words text-lg font-medium ${langConfig.fontClass}`}
+          >
+            {strings.sectionWatchOuts}
+          </h3>
+          <ul className={`list-disc space-y-1.5 break-words pl-5 text-sm ${langConfig.fontClass}`}>
+            {displayWatchOuts.map((item, idx) => (
+              <li key={idx} className="break-words">
+                {item}
+              </li>
+            ))}
+          </ul>
         </section>
+      ) : null}
 
-        {/* 7. Safe WhatsApp Share + Disclaimer */}
-        <section className="space-y-3 p-4 sm:p-6" style={{ borderColor: 'var(--border-hairline)' }}>
-          <WhatsAppShare rawRedactedExplanation={explanation} vault={vault} language={language} />
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Samjho explains paperwork in plain language and helps organize next steps. It does not
-            provide legal, medical, or financial advice.
-          </p>
+      {/* 5. Next Steps */}
+      {displayNextSteps.length > 0 ? (
+        <section className="space-y-2.5 py-5" style={{ borderColor: 'var(--border-hairline)' }}>
+          <h3
+            className={`font-serif-heading break-words text-lg font-medium ${langConfig.fontClass}`}
+          >
+            {strings.sectionNextSteps}
+          </h3>
+          <ol className={`list-decimal space-y-2 break-words pl-5 text-sm ${langConfig.fontClass}`}>
+            {displayNextSteps.map((step, idx) => (
+              <li key={idx} className="break-words">
+                {step}
+              </li>
+            ))}
+          </ol>
         </section>
-      </div>
+      ) : null}
+
+      {/* 6. Draft Reply */}
+      <section className="py-5" style={{ borderColor: 'var(--border-hairline)' }}>
+        <DraftReplyBox
+          draftReply={displayDraftReply}
+          language={language}
+          fontClass={langConfig.fontClass}
+        />
+      </section>
+
+      {/* 7. Safe WhatsApp Share + Disclaimer */}
+      <section className="space-y-3 py-5" style={{ borderColor: 'var(--border-hairline)' }}>
+        <WhatsAppShare
+          rawRedactedExplanation={explanation}
+          vault={vault}
+          language={language}
+          note={strings.whatsappNote}
+        />
+        <p className="text-xs break-words" style={{ color: 'var(--text-muted)' }}>
+          {strings.disclaimerText}
+        </p>
+      </section>
     </article>
   );
 }

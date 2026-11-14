@@ -7,12 +7,14 @@ import {
   type ExplainResponse,
 } from './schema';
 
-class ClientRequestError extends Error {
+export class ExplainServiceError extends Error {
   readonly status: number;
+  readonly code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -24,7 +26,7 @@ export interface SupabaseEdgeProviderOptions {
 
 /**
  * Calls the deployed Supabase Edge Function (`supabase/functions/explain`)
- * with the Supabase anon key Bearer token and strictly redacted text only.
+ * with the Supabase publishable key in the apikey header only and strictly redacted text.
  */
 export class SupabaseEdgeLLMProvider implements LLMProvider {
   readonly name = 'supabase-edge-explain';
@@ -48,7 +50,6 @@ export class SupabaseEdgeLLMProvider implements LLMProvider {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${config.supabaseAnonKey}`,
             apikey: config.supabaseAnonKey,
           },
           body: JSON.stringify(validatedInput),
@@ -64,27 +65,26 @@ export class SupabaseEdgeLLMProvider implements LLMProvider {
         }
 
         if (!response.ok) {
+          const errorObj =
+            typeof body === 'object' && body !== null
+              ? (body as { error?: unknown; code?: unknown })
+              : {};
           const message =
-            typeof body === 'object' &&
-            body !== null &&
-            'error' in body &&
-            typeof (body as { error?: unknown }).error === 'string'
-              ? (body as { error: string }).error
+            typeof errorObj.error === 'string'
+              ? errorObj.error
               : `Could not explain this document right now (HTTP ${response.status}).`;
-
-          if (response.status >= 400 && response.status < 500) {
-            throw new ClientRequestError(message, response.status);
-          }
-          throw new Error(message);
+          const code = typeof errorObj.code === 'string' ? errorObj.code : undefined;
+          throw new ExplainServiceError(message, response.status, code);
         }
 
         return ExplainResponseSchema.parse(body);
       },
       1,
-      this.backoffMs
+      this.backoffMs,
+      (err) => !(err instanceof ExplainServiceError)
     ).catch((err) => {
-      if (err instanceof ClientRequestError) {
-        throw new Error(err.message);
+      if (err instanceof ExplainServiceError) {
+        throw err;
       }
       throw err instanceof Error ? err : new Error('Unable to reach explanation service.');
     });

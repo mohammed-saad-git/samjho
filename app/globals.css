@@ -61,11 +61,15 @@ body {
 }
 
 .font-serif-heading {
-  font-family: var(--font-serif), Georgia, serif;
+  font-family:
+    var(--font-serif), var(--font-indic-hi), var(--font-indic-kn), var(--font-indic-ta),
+    var(--font-indic-te), Georgia, serif;
 }
 
 .font-mono-code {
-  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family:
+    var(--font-mono), var(--font-indic-hi), var(--font-indic-kn), var(--font-indic-ta),
+    var(--font-indic-te), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .font-indic-hi {
@@ -96,6 +100,7 @@ body {
     opacity: 0.35;
     transform: translateY(-2px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -105,6 +110,7 @@ body {
 .redaction-bar {
   display: inline-flex;
   align-items: center;
+  min-height: 24px;
   background-color: var(--text-ink);
   color: var(--bg-paper);
   font-family: var(--font-mono), ui-monospace, monospace;
@@ -126,11 +132,12 @@ body {
 .redaction-bar-disabled {
   display: inline-flex;
   align-items: center;
+  min-height: 24px;
   background-color: var(--risk-high-surface);
   color: var(--risk-high);
   border: 1px dashed var(--risk-high);
   border-radius: 3px;
-  padding: 1px 5px;
+  padding: 2px 6px;
   cursor: pointer;
 }
 
@@ -138,6 +145,7 @@ body {
   .redaction-bar {
     animation: none;
   }
+
   * {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;

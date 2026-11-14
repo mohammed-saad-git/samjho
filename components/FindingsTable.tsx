@@ -3,8 +3,11 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { HelpCircle } from 'lucide-react';
 import type { Finding, PIICategory, Severity } from '@/lib/detect';
+import { getLanguageConfig, type LanguageCode } from '@/lib/i18n/languages';
+import { UI_TRANSLATIONS } from '@/lib/i18n/translations';
 
 interface FindingsTableProps {
+  language: LanguageCode;
   findings: readonly Finding[];
 }
 
@@ -70,20 +73,21 @@ const CATEGORY_METADATA: Record<PIICategory, { label: string; note: string }> = 
   },
 };
 
-export function FindingsTable({ findings }: FindingsTableProps) {
+export function FindingsTable({ language, findings }: FindingsTableProps) {
+  const langConfig = getLanguageConfig(language);
+  const strings = UI_TRANSLATIONS[language];
+
   if (findings.length === 0) {
     return (
       <section
-        aria-label="Detected identifiers"
-        className="rounded-[6px] border p-4 text-sm"
+        aria-label={strings.findingsHeading}
+        className={`border-y py-3.5 text-sm break-words ${langConfig.fontClass}`}
         style={{
           borderColor: 'var(--border-hairline)',
-          backgroundColor: 'var(--bg-surface)',
           color: 'var(--text-muted)',
         }}
       >
-        No personal identifiers are currently marked for redaction. Click any word in the original
-        document above if you want to mask it manually.
+        {strings.noFindingsMessage}
       </section>
     );
   }
@@ -127,49 +131,119 @@ export function FindingsTable({ findings }: FindingsTableProps) {
   return (
     <section
       aria-labelledby="findings-table-heading"
-      className="rounded-[6px] border"
-      style={{
-        borderColor: 'var(--border-hairline)',
-        backgroundColor: 'var(--bg-surface)',
-      }}
+      className={`border-y py-3 ${langConfig.fontClass}`}
+      style={{ borderColor: 'var(--border-hairline)' }}
     >
-      <div
-        className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5"
-        style={{ borderColor: 'var(--border-hairline)' }}
-      >
-        <h3 id="findings-table-heading" className="text-sm font-medium">
-          Identifiers detected &amp; masked on device
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5">
+        <h3 id="findings-table-heading" className="text-sm font-medium break-words">
+          {strings.findingsHeading}
         </h3>
         <span className="font-mono-code text-xs" style={{ color: 'var(--text-muted)' }}>
-          {findings.length} {findings.length === 1 ? 'span' : 'spans'} across {rows.length}{' '}
-          {rows.length === 1 ? 'category' : 'categories'}
+          {findings.length} / {rows.length}
         </span>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* Mobile (<640px): stacked dense list with zero horizontal clipping */}
+      <ul className="divide-y border-t sm:hidden" style={{ borderColor: 'var(--border-hairline)' }}>
+        {rows.map((row) => {
+          const confPercent = Math.round(row.maxConfidence * 100);
+          const confLabel =
+            row.category === 'PERSON'
+              ? `Heuristic (${confPercent}%)`
+              : row.category === 'REDACTED'
+                ? 'Manual (100%)'
+                : `${confPercent}%`;
+          const sevLabel = row.severity === 'high' ? strings.severityHigh : strings.severityMedium;
+
+          return (
+            <li
+              key={row.category}
+              className="py-2.5"
+              style={{ borderColor: 'var(--border-hairline)' }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1">
+                  <span className="text-sm font-medium break-words">{row.label}</span>
+                  <Tooltip.Provider delayDuration={150}>
+                    <Tooltip.Root>
+                      <Tooltip.Trigger asChild>
+                        <button
+                          type="button"
+                          className="-my-2 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-[4px]"
+                          aria-label={`Details about ${row.label} detection`}
+                          style={{ color: 'var(--text-muted)' }}
+                        >
+                          <HelpCircle className="h-3.5 w-3.5" strokeWidth={1.5} />
+                        </button>
+                      </Tooltip.Trigger>
+                      <Tooltip.Portal>
+                        <Tooltip.Content
+                          sideOffset={5}
+                          className="z-50 max-w-xs rounded-[4px] border px-2.5 py-1.5 text-xs"
+                          style={{
+                            borderColor: 'var(--text-ink)',
+                            backgroundColor: 'var(--text-ink)',
+                            color: 'var(--bg-paper)',
+                          }}
+                        >
+                          {row.note}
+                          <Tooltip.Arrow style={{ fill: 'var(--text-ink)' }} />
+                        </Tooltip.Content>
+                      </Tooltip.Portal>
+                    </Tooltip.Root>
+                  </Tooltip.Provider>
+                </div>
+
+                <span
+                  className="shrink-0 rounded-[3px] px-2 py-0.5 text-xs font-medium"
+                  style={{
+                    backgroundColor:
+                      row.severity === 'high'
+                        ? 'var(--risk-high-surface)'
+                        : 'var(--risk-medium-surface)',
+                    color: row.severity === 'high' ? 'var(--risk-high)' : 'var(--risk-medium)',
+                  }}
+                >
+                  {sevLabel}
+                </span>
+              </div>
+
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
+                <span className="font-mono-code break-all">{row.tokens.join(', ')}</span>
+                <span className="font-mono-code shrink-0" style={{ color: 'var(--text-muted)' }}>
+                  ×{row.count} · {confLabel}
+                </span>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* Desktop / Tablet (>=640px): dense table */}
+      <div className="hidden overflow-x-auto sm:block">
         <table className="w-full border-collapse text-left text-sm">
           <thead>
             <tr
-              className="border-b font-mono-code text-xs uppercase tracking-wider"
+              className="border-y text-xs font-medium uppercase tracking-wider"
               style={{
                 borderColor: 'var(--border-hairline)',
                 color: 'var(--text-muted)',
               }}
             >
-              <th scope="col" className="px-4 py-2 font-medium">
-                Category
+              <th scope="col" className="py-2 pr-3 font-medium">
+                {strings.colCategory}
               </th>
               <th scope="col" className="px-3 py-2 font-medium">
-                Count
+                {strings.colCount}
               </th>
               <th scope="col" className="px-3 py-2 font-medium">
-                Session tokens
+                {strings.colTokens}
               </th>
               <th scope="col" className="px-3 py-2 font-medium">
-                Confidence
+                {strings.colConfidence}
               </th>
-              <th scope="col" className="px-4 py-2 font-medium">
-                Severity
+              <th scope="col" className="py-2 pl-3 font-medium">
+                {strings.colSeverity}
               </th>
             </tr>
           </thead>
@@ -182,6 +256,8 @@ export function FindingsTable({ findings }: FindingsTableProps) {
                   : row.category === 'REDACTED'
                     ? 'Manual (100%)'
                     : `${confPercent}%`;
+              const sevLabel =
+                row.severity === 'high' ? strings.severityHigh : strings.severityMedium;
 
               return (
                 <tr
@@ -189,15 +265,15 @@ export function FindingsTable({ findings }: FindingsTableProps) {
                   className="border-b last:border-b-0"
                   style={{ borderColor: 'var(--border-hairline)' }}
                 >
-                  <td className="px-4 py-2 font-medium">
-                    <div className="flex items-center gap-1.5">
+                  <td className="py-2 pr-3 font-medium">
+                    <div className="flex items-center gap-1">
                       <span>{row.label}</span>
                       <Tooltip.Provider delayDuration={150}>
                         <Tooltip.Root>
                           <Tooltip.Trigger asChild>
                             <button
                               type="button"
-                              className="inline-flex h-5 w-5 items-center justify-center rounded-[3px]"
+                              className="-my-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[4px]"
                               aria-label={`Details about ${row.label} detection`}
                               style={{ color: 'var(--text-muted)' }}
                             >
@@ -225,9 +301,9 @@ export function FindingsTable({ findings }: FindingsTableProps) {
                   <td className="px-3 py-2 font-mono-code text-xs">{row.count}</td>
                   <td className="px-3 py-2 font-mono-code text-xs">{row.tokens.join(', ')}</td>
                   <td className="px-3 py-2 font-mono-code text-xs">{confLabel}</td>
-                  <td className="px-4 py-2">
+                  <td className="py-2 pl-3">
                     <span
-                      className="inline-block rounded-[3px] px-2 py-0.5 font-mono-code text-xs uppercase"
+                      className="inline-block rounded-[3px] px-2 py-0.5 text-xs font-medium"
                       style={{
                         backgroundColor:
                           row.severity === 'high'
@@ -236,7 +312,7 @@ export function FindingsTable({ findings }: FindingsTableProps) {
                         color: row.severity === 'high' ? 'var(--risk-high)' : 'var(--risk-medium)',
                       }}
                     >
-                      {row.severity}
+                      {sevLabel}
                     </span>
                   </td>
                 </tr>

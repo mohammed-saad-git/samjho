@@ -1,7 +1,10 @@
 'use client';
 
+import type { MouseEvent } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import type { Finding } from '@/lib/detect';
+import { getLanguageConfig, type LanguageCode } from '@/lib/i18n/languages';
+import { UI_TRANSLATIONS } from '@/lib/i18n/translations';
 
 export interface ManualSpan {
   start: number;
@@ -10,6 +13,7 @@ export interface ManualSpan {
 }
 
 interface SplitWorkspaceProps {
+  language: LanguageCode;
   originalText: string;
   redactedText: string;
   allAutoFindings: readonly Finding[];
@@ -116,11 +120,7 @@ function buildSegments(
   return segments;
 }
 
-function renderPlainTokens(
-  text: string,
-  baseOffset: number,
-  onToggleManualWord: (span: ManualSpan) => void
-) {
+function renderPlainTokens(text: string, baseOffset: number) {
   const parts: React.ReactNode[] = [];
   const regex = /(\S+|\s+)/g;
   let match: RegExpExecArray | null;
@@ -135,15 +135,16 @@ function renderPlainTokens(
       parts.push(<span key={`ws-${start}-${idx}`}>{piece}</span>);
     } else {
       parts.push(
-        <button
+        <span
           key={`w-${start}-${idx}`}
-          type="button"
-          onClick={() => onToggleManualWord({ start, end, text: piece })}
+          data-manual-start={start}
+          data-manual-end={end}
+          data-manual-text={piece}
           title={`Click to redact "${piece}"`}
-          className="inline cursor-pointer rounded-[2px] px-[1px] text-left transition-colors hover:bg-[var(--bg-inset)]"
+          className="cursor-pointer rounded-[2px] px-[1px] transition-colors hover:bg-[var(--bg-inset)]"
         >
           {piece}
-        </button>
+        </span>
       );
     }
     idx += 1;
@@ -177,6 +178,7 @@ function renderRedactedPreview(redactedText: string) {
 }
 
 export function SplitWorkspace({
+  language,
   originalText,
   redactedText,
   allAutoFindings,
@@ -186,6 +188,9 @@ export function SplitWorkspace({
   onToggleAutoFinding,
   onToggleManualWord,
 }: SplitWorkspaceProps) {
+  const langConfig = getLanguageConfig(language);
+  const strings = UI_TRANSLATIONS[language];
+
   const segments = buildSegments(
     originalText,
     allAutoFindings,
@@ -194,32 +199,55 @@ export function SplitWorkspace({
     manualSpans
   );
 
+  const handleOriginalTextClick = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    const wordEl = target?.closest<HTMLElement>('[data-manual-start]');
+    if (!wordEl) return;
+
+    const startAttr = wordEl.getAttribute('data-manual-start');
+    const endAttr = wordEl.getAttribute('data-manual-end');
+    const textAttr = wordEl.getAttribute('data-manual-text');
+    if (startAttr === null || endAttr === null || textAttr === null) return;
+
+    const start = Number(startAttr);
+    const end = Number(endAttr);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+
+    onToggleManualWord({ start, end, text: textAttr });
+  };
+
   let barSequence = 0;
 
   const originalPane = (
     <div
-      className="flex h-full flex-col rounded-[6px] border"
+      className="flex h-full flex-col rounded-[4px] border"
       style={{
         borderColor: 'var(--border-hairline)',
         backgroundColor: 'var(--bg-surface)',
       }}
     >
       <div
-        className="flex items-center justify-between gap-2 border-b px-4 py-2.5"
+        className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5"
         style={{ borderColor: 'var(--border-hairline)' }}
       >
-        <h3 className="text-sm font-medium">Original document (click any word to toggle)</h3>
-        <span className="font-mono-code text-xs" style={{ color: 'var(--text-muted)' }}>
-          stays on device
+        <h3 className={`text-sm font-medium break-words ${langConfig.fontClass}`}>
+          {strings.originalPaneTitle}
+        </h3>
+        <span
+          className={`text-xs break-words ${langConfig.fontClass}`}
+          style={{ color: 'var(--text-muted)' }}
+        >
+          {strings.staysOnDeviceLabel}
         </span>
       </div>
-      <div className="max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words p-4 text-sm leading-7">
+      <div
+        onClick={handleOriginalTextClick}
+        className="max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words p-4 text-sm leading-8"
+      >
         {segments.map((seg, idx) => {
           if (seg.kind === 'plain') {
             return (
-              <span key={`p-${seg.start}-${idx}`}>
-                {renderPlainTokens(seg.text, seg.start, onToggleManualWord)}
-              </span>
+              <span key={`p-${seg.start}-${idx}`}>{renderPlainTokens(seg.text, seg.start)}</span>
             );
           }
 
@@ -229,9 +257,12 @@ export function SplitWorkspace({
               <button
                 key={`m-${seg.start}-${idx}`}
                 type="button"
-                onClick={() => onToggleManualWord(seg.span)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleManualWord(seg.span);
+                }}
                 style={{ animationDelay: `${delayMs}ms` }}
-                className="redaction-bar mx-0.5"
+                className="redaction-bar mx-0.5 my-0.5"
                 title={`Manually redacted: "${seg.span.text}". Click to restore.`}
                 aria-label={`Manually redacted ${seg.span.text} as ${seg.token}. Click to restore.`}
               >
@@ -246,9 +277,12 @@ export function SplitWorkspace({
               <button
                 key={`a-${seg.finding.id}`}
                 type="button"
-                onClick={() => onToggleAutoFinding(seg.finding.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleAutoFinding(seg.finding.id);
+                }}
                 style={{ animationDelay: `${delayMs}ms` }}
-                className="redaction-bar mx-0.5"
+                className="redaction-bar mx-0.5 my-0.5"
                 title={`Redacted ${seg.finding.category}: "${seg.finding.text}". Click to include in AI request.`}
                 aria-label={`Redacted ${seg.finding.category} as ${seg.finding.token}. Click to toggle.`}
               >
@@ -261,8 +295,11 @@ export function SplitWorkspace({
             <button
               key={`d-${seg.finding.id}`}
               type="button"
-              onClick={() => onToggleAutoFinding(seg.finding.id)}
-              className="redaction-bar-disabled mx-0.5"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleAutoFinding(seg.finding.id);
+              }}
+              className="redaction-bar-disabled mx-0.5 my-0.5"
               title={`Unredacted ${seg.finding.category}. Click to redact again.`}
               aria-label={`Unredacted ${seg.finding.text}. Click to redact.`}
             >
@@ -276,51 +313,50 @@ export function SplitWorkspace({
 
   const redactedPane = (
     <div
-      className="flex h-full flex-col rounded-[6px] border"
+      className="flex h-full flex-col rounded-[4px] border"
       style={{
         borderColor: 'var(--border-hairline)',
         backgroundColor: 'var(--bg-surface)',
       }}
     >
       <div
-        className="flex items-center justify-between gap-2 border-b px-4 py-2.5"
+        className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5"
         style={{ borderColor: 'var(--border-hairline)' }}
       >
-        <h3 className="text-sm font-medium">What the AI will see</h3>
+        <h3 className={`text-sm font-medium break-words ${langConfig.fontClass}`}>
+          {strings.redactedPaneTitle}
+        </h3>
         <span className="font-mono-code text-xs" style={{ color: 'var(--accent-protected)' }}>
-          {redactedText.length.toLocaleString()} chars
+          {redactedText.length.toLocaleString()} {strings.charsSuffix}
         </span>
       </div>
-      <div className="max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words p-4 font-mono-code text-[0.82rem] leading-7">
+      <div className="max-h-[420px] overflow-y-auto whitespace-pre-wrap break-words p-4 text-sm leading-8">
         {renderRedactedPreview(redactedText)}
       </div>
     </div>
   );
 
   return (
-    <section aria-label="Split comparison of original and redacted document">
-      {/* Mobile (<768px): Radix Tabs */}
+    <section aria-label={strings.redactedPaneTitle}>
+      {/* Mobile (<768px): flat underline Tabs above active pane */}
       <div className="md:hidden">
         <Tabs.Root defaultValue="original">
           <Tabs.List
-            className="mb-3 grid grid-cols-2 rounded-[4px] border p-1"
-            style={{
-              borderColor: 'var(--border-hairline)',
-              backgroundColor: 'var(--bg-surface)',
-            }}
-            aria-label="Document view"
+            className="mb-3 flex border-b"
+            style={{ borderColor: 'var(--border-hairline)' }}
+            aria-label={strings.redactedPaneTitle}
           >
             <Tabs.Trigger
               value="original"
-              className="min-h-[44px] rounded-[3px] px-2 text-xs font-medium data-[state=active]:bg-[var(--text-ink)] data-[state=active]:text-[var(--bg-paper)]"
+              className={`min-h-[44px] flex-1 border-b-2 border-transparent px-3 py-2 text-xs font-medium data-[state=active]:border-[var(--accent-protected)] data-[state=active]:text-[var(--accent-protected)] ${langConfig.fontClass}`}
             >
-              Original (tap to edit)
+              {strings.mobileTabOriginal}
             </Tabs.Trigger>
             <Tabs.Trigger
               value="redacted"
-              className="min-h-[44px] rounded-[3px] px-2 text-xs font-medium data-[state=active]:bg-[var(--text-ink)] data-[state=active]:text-[var(--bg-paper)]"
+              className={`min-h-[44px] flex-1 border-b-2 border-transparent px-3 py-2 text-xs font-medium data-[state=active]:border-[var(--accent-protected)] data-[state=active]:text-[var(--accent-protected)] ${langConfig.fontClass}`}
             >
-              What the AI will see
+              {strings.mobileTabRedacted}
             </Tabs.Trigger>
           </Tabs.List>
           <Tabs.Content value="original">{originalPane}</Tabs.Content>

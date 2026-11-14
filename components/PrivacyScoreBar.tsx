@@ -4,8 +4,11 @@ import { useEffect, useState } from 'react';
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { HelpCircle, ShieldCheck } from 'lucide-react';
 import type { Finding, PrivacyScoreReport } from '@/lib/detect';
+import { getLanguageConfig, type LanguageCode } from '@/lib/i18n/languages';
+import { UI_TRANSLATIONS } from '@/lib/i18n/translations';
 
 interface PrivacyScoreBarProps {
+  language: LanguageCode;
   beforeScore: PrivacyScoreReport;
   afterScore: PrivacyScoreReport;
   findings: readonly Finding[];
@@ -13,12 +16,13 @@ interface PrivacyScoreBarProps {
   scanKey: number;
 }
 
-function summarizeCategories(findings: readonly Finding[]): string {
+function summarizeCategories(findings: readonly Finding[], language: LanguageCode): string {
+  const strings = UI_TRANSLATIONS[language];
   const labels = new Set<string>();
   for (const f of findings) {
     switch (f.category) {
       case 'AADHAAR':
-        labels.add('Aadhaar number');
+        labels.add('Aadhaar');
         break;
       case 'PAN':
         labels.add('PAN');
@@ -27,10 +31,10 @@ function summarizeCategories(findings: readonly Finding[]): string {
         labels.add('phone number');
         break;
       case 'EMAIL':
-        labels.add('email address');
+        labels.add('email');
         break;
       case 'UPI':
-        labels.add('UPI handle');
+        labels.add('UPI ID');
         break;
       case 'ACCOUNT':
         labels.add('account number');
@@ -45,10 +49,10 @@ function summarizeCategories(findings: readonly Finding[]): string {
         labels.add('date of birth');
         break;
       case 'PASSPORT':
-        labels.add('passport number');
+        labels.add('passport');
         break;
       case 'IFSC':
-        labels.add('IFSC code');
+        labels.add('IFSC');
         break;
       case 'REDACTED':
         labels.add('selected words');
@@ -56,15 +60,15 @@ function summarizeCategories(findings: readonly Finding[]): string {
     }
   }
   const list = Array.from(labels);
-  if (list.length === 0) return 'No personal identifiers were detected';
-  if (list.length === 1)
-    return `Your ${list[0]} is removed on this device before the text goes to the AI.`;
+  if (list.length === 0) return strings.noIdentifiersDetected;
+  if (list.length === 1) return `${list[0]} ${strings.removedSingleSummary}`;
   const head = list.slice(0, -1).join(', ');
   const tail = list[list.length - 1];
-  return `Your ${head} and ${tail} are removed on this device before the text goes to the AI.`;
+  return `${head} & ${tail} — ${strings.removedListSummary}`;
 }
 
 export function PrivacyScoreBar({
+  language,
   beforeScore,
   afterScore,
   findings,
@@ -72,6 +76,8 @@ export function PrivacyScoreBar({
   scanKey,
 }: PrivacyScoreBarProps) {
   const [displayAfter, setDisplayAfter] = useState(afterScore.score);
+  const langConfig = getLanguageConfig(language);
+  const strings = UI_TRANSLATIONS[language];
 
   useEffect(() => {
     const prefersReduced =
@@ -110,18 +116,17 @@ export function PrivacyScoreBar({
 
   return (
     <section
-      aria-label="On-device privacy check"
-      className="rounded-[6px] border p-4 sm:px-6"
+      aria-label={strings.privacyScoreLabel}
+      className={`border-y py-4 ${langConfig.fontClass}`}
       style={{
         borderColor: highRemaining ? 'var(--risk-high)' : 'var(--border-hairline)',
-        backgroundColor: 'var(--bg-surface)',
       }}
     >
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="space-y-1">
+        <div className="min-w-0 space-y-1.5">
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className="inline-flex items-center gap-1.5 rounded-[4px] px-2 py-0.5 font-mono-code text-xs font-medium"
+              className="inline-flex items-center gap-1.5 rounded-[4px] px-2.5 py-1 text-xs font-medium break-words"
               style={{
                 backgroundColor: hasSentToServer
                   ? 'var(--bg-inset)'
@@ -129,40 +134,33 @@ export function PrivacyScoreBar({
                 color: hasSentToServer ? 'var(--text-ink)' : 'var(--accent-protected)',
               }}
             >
-              <ShieldCheck className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
-              <span>
-                {hasSentToServer
-                  ? 'Redacted text sent for explanation. Identifiers stay on device.'
-                  : 'Nothing has been sent yet.'}
-              </span>
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} aria-hidden="true" />
+              <span>{hasSentToServer ? strings.statusSent : strings.statusNotSent}</span>
             </span>
           </div>
 
-          <p className="text-sm">{summarizeCategories(findings)}</p>
+          <p className="text-sm break-words">{summarizeCategories(findings, language)}</p>
         </div>
 
-        <div className="flex shrink-0 items-center gap-3">
-          <div
-            className="rounded-[4px] border px-3.5 py-2"
-            style={{
-              borderColor: 'var(--border-hairline)',
-              backgroundColor: 'var(--bg-paper)',
-            }}
-          >
-            <div className="flex items-center gap-1.5">
+        <div
+          className="flex shrink-0 items-center justify-between border-t pt-3 md:border-l md:border-t-0 md:pl-6 md:pt-0"
+          style={{ borderColor: 'var(--border-hairline)' }}
+        >
+          <div>
+            <div className="flex items-center gap-1">
               <span
-                className="font-mono-code text-xs uppercase tracking-wider"
+                className="text-xs font-medium uppercase tracking-wider"
                 style={{ color: 'var(--text-muted)' }}
               >
-                Privacy score
+                {strings.privacyScoreLabel}
               </span>
               <Tooltip.Provider delayDuration={150}>
                 <Tooltip.Root>
                   <Tooltip.Trigger asChild>
                     <button
                       type="button"
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-[3px]"
-                      aria-label="How the privacy score is calculated"
+                      className="-my-2 -mr-2 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[4px]"
+                      aria-label={strings.privacyScoreTooltipHelp}
                     >
                       <HelpCircle className="h-3.5 w-3.5" strokeWidth={1.5} />
                     </button>
@@ -207,9 +205,8 @@ export function PrivacyScoreBar({
       </div>
 
       {highRemaining ? (
-        <p className="mt-2.5 text-xs font-medium" style={{ color: 'var(--risk-high)' }}>
-          One or more high-severity identifiers remain unredacted in the outgoing text. Re-enable
-          redaction before sending.
+        <p className="mt-2.5 text-xs font-medium break-words" style={{ color: 'var(--risk-high)' }}>
+          {strings.highRiskRemainingWarning}
         </p>
       ) : null}
     </section>

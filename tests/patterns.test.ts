@@ -81,4 +81,18 @@ describe('Pattern detectors — positive and negative cases', () => {
     const findings = detectPII(text);
     expect(findings).toHaveLength(0);
   });
+
+  it('stops labeled address matching at 6-digit PIN code and section headings in single-newline PDF text', () => {
+    const text = [
+      'Address: 42 MG Road, Pune - 411001',
+      '----------------------------------------',
+      'LOAN & OVERDUE SUMMARY',
+      '1. Overdue EMI: Rs. 37,500',
+    ].join('\n');
+
+    const findings = detectPII(text);
+    const addresses = findings.filter((f) => f.category === 'ADDRESS');
+    expect(addresses).toHaveLength(1);
+    expect(addresses[0]?.text).toBe('42 MG Road, Pune - 411001');
+  });
 });
