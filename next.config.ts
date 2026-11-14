@@ -9,7 +9,7 @@ const cspDirectives = [
   "img-src 'self' blob: data:",
   "font-src 'self' data:",
   "worker-src 'self' blob:",
-  "connect-src 'self' https://cdn.jsdelivr.net https://tessdata.projectnaptha.com blob: data:",
+  "connect-src 'self' https://*.supabase.co http://127.0.0.1:54321 http://localhost:54321 https://cdn.jsdelivr.net https://tessdata.projectnaptha.com blob: data:",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

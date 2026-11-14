@@ -1,8 +1,8 @@
-import { detectNames } from './names';
-import { detectPatternMatches } from './patterns';
-import { computePrivacyScore, resolveOverlaps } from './score';
-import type { Finding, PIICategory, PrivacyScoreReport } from './types';
-import { redactText, SessionVault } from './vault';
+import { detectNames } from './names.ts';
+import { detectPatternMatches } from './patterns.ts';
+import { computePrivacyScore, resolveOverlaps } from './score.ts';
+import type { Finding, PIICategory, PrivacyScoreReport } from './types.ts';
+import { redactText, SessionVault } from './vault.ts';
 
 export type {
   CandidateMatch,
@@ -11,16 +11,16 @@ export type {
   PIICategory,
   PrivacyScoreReport,
   Severity,
-} from './types';
-export { generateVerhoeffChecksum, normalizeAadhaarDigits, validateVerhoeff } from './verhoeff';
+} from './types.ts';
+export { generateVerhoeffChecksum, normalizeAadhaarDigits, validateVerhoeff } from './verhoeff.ts';
 export {
   normalizeIdentifierValue,
   redactText,
   rehydrateText,
   scrubForSafeSharing,
   SessionVault,
-} from './vault';
-export { computePrivacyScore, resolveOverlaps } from './score';
+} from './vault.ts';
+export { computePrivacyScore, resolveOverlaps } from './score.ts';
 
 /**
  * Detects personal identifiers in text, resolves overlaps (longest span, then highest severity),

@@ -1,4 +1,4 @@
-import type { CandidateMatch } from './types';
+import type { CandidateMatch } from './types.ts';
 
 const NON_NAME_STOPWORDS = new Set([
   'account',

@@ -1,7 +1,8 @@
-import { GeminiLLMProvider } from './gemini';
 import type { LLMProvider } from './provider';
+import { SupabaseEdgeLLMProvider } from './supabase';
 
 export type { LLMProvider } from './provider';
+export { SupabaseEdgeLLMProvider } from './supabase';
 export {
   ExplainRequestSchema,
   ExplainResponseSchema,
@@ -12,5 +13,5 @@ export {
 } from './schema';
 
 export function getLLMProvider(): LLMProvider {
-  return new GeminiLLMProvider();
+  return new SupabaseEdgeLLMProvider();
 }

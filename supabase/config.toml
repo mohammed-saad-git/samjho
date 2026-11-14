@@ -1,0 +1,4 @@
+project_id = "samjho"
+
+[functions.explain]
+verify_jwt = true

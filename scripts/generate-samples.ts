@@ -8,12 +8,37 @@ import {
   generateVerhoeffChecksum,
   redactText,
   SessionVault,
-} from '../lib/detect';
+} from '../lib/detect/index.ts';
+import { getSupabaseFunctionConfig } from '../lib/env';
+import { SUPPORTED_LANGUAGES } from '../lib/i18n/languages';
 import {
   ExplainResponseSchema,
   type ExplainResponse,
   type TargetLanguage,
 } from '../lib/llm/schema';
+import { SupabaseEdgeLLMProvider } from '../lib/llm/supabase';
+
+function loadDotEnvLocal(): void {
+  const envLocalPath = path.resolve(process.cwd(), '.env.local');
+  if (!fs.existsSync(envLocalPath)) {
+    return;
+  }
+  const content = fs.readFileSync(envLocalPath, 'utf8');
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eqIndex = line.indexOf('=');
+    if (eqIndex <= 0) continue;
+    const key = line.slice(0, eqIndex).trim();
+    let val = line.slice(eqIndex + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (key && !process.env[key]) {
+      process.env[key] = val;
+    }
+  }
+}
 
 function formatAadhaar(digits: string): string {
   return `${digits.slice(0, 4)} ${digits.slice(4, 8)} ${digits.slice(8, 12)}`;
@@ -822,12 +847,23 @@ const SAMPLE_RESPONSES: Record<string, Record<TargetLanguage, ExplainResponse>> 
 };
 
 async function main(): Promise<void> {
+  const docsOnly = process.argv.includes('--docs-only');
   const publicDir = path.resolve(process.cwd(), 'public/samples');
   const fixturesDir = path.resolve(process.cwd(), 'fixtures');
   const fixtureTextDir = path.join(fixturesDir, 'samples');
 
   fs.mkdirSync(publicDir, { recursive: true });
   fs.mkdirSync(fixtureTextDir, { recursive: true });
+
+  if (!docsOnly) {
+    loadDotEnvLocal();
+    // Fail fast if frontend Supabase public env variables are not configured.
+    const config = getSupabaseFunctionConfig();
+    console.log(`Calling deployed Supabase Edge Function: ${config.explainFunctionUrl}`);
+  }
+
+  const provider = docsOnly ? null : new SupabaseEdgeLLMProvider();
+  const outputResponses: Record<string, Record<TargetLanguage, ExplainResponse>> = {};
 
   for (const spec of SAMPLE_SPECS) {
     const outPublic = path.join(publicDir, spec.filename);
@@ -860,35 +896,51 @@ async function main(): Promise<void> {
       );
     }
 
-    // Validate all pre-generated language responses against Zod schema
-    const responsesForDoc = SAMPLE_RESPONSES[spec.id];
-    if (!responsesForDoc) {
-      throw new Error(`Missing SAMPLE_RESPONSES for ${spec.id}`);
-    }
-    for (const [lang, payload] of Object.entries(responsesForDoc)) {
-      ExplainResponseSchema.parse(payload);
-      // Verify all [TOKEN_NN] placeholders in the English response actually exist in vault
-      const tokensInSummary = payload.summary.match(/\[[A-Z]+_\d{2}\]/g) ?? [];
-      for (const tok of tokensInSummary) {
-        if (!vault.hasToken(tok)) {
-          throw new Error(
-            `Sample ${spec.id} (${lang}) references token ${tok}, which is not in vault: ${vault
-              .entries()
-              .map((e) => e.token)
-              .join(', ')}`
-          );
+    if (docsOnly) {
+      const responsesForDoc = SAMPLE_RESPONSES[spec.id];
+      if (!responsesForDoc) {
+        throw new Error(`Missing SAMPLE_RESPONSES for ${spec.id}`);
+      }
+      for (const [lang, payload] of Object.entries(responsesForDoc)) {
+        ExplainResponseSchema.parse(payload);
+        const tokensInSummary = payload.summary.match(/\[[A-Z]+_\d{2}\]/g) ?? [];
+        for (const tok of tokensInSummary) {
+          if (!vault.hasToken(tok)) {
+            throw new Error(
+              `Sample ${spec.id} (${lang}) references token ${tok}, which is not in vault: ${vault
+                .entries()
+                .map((e) => e.token)
+                .join(', ')}`
+            );
+          }
         }
       }
+      outputResponses[spec.id] = responsesForDoc;
+    } else {
+      const liveForDoc = {} as Record<TargetLanguage, ExplainResponse>;
+      for (const langConfig of SUPPORTED_LANGUAGES) {
+        const result = await provider!.explain({
+          redactedText: redacted,
+          targetLanguage: langConfig.code,
+          documentHint: spec.documentHint,
+        });
+        const parsed = ExplainResponseSchema.parse(result);
+        liveForDoc[langConfig.code] = parsed;
+        console.log(`  -> generated ${spec.id} (${langConfig.code}) via Supabase Edge Function`);
+      }
+      outputResponses[spec.id] = liveForDoc;
     }
   }
 
   fs.writeFileSync(
     path.join(fixturesDir, 'sample-responses.json'),
-    JSON.stringify(SAMPLE_RESPONSES, null, 2),
+    JSON.stringify(outputResponses, null, 2),
     'utf8'
   );
   console.log(
-    'Generated public/samples/*, fixtures/samples/*.txt, and fixtures/sample-responses.json'
+    docsOnly
+      ? 'Regenerated public/samples/*, fixtures/samples/*.txt, and validated existing fixtures (--docs-only).'
+      : 'Regenerated public/samples/*, fixtures/samples/*.txt, and fixtures/sample-responses.json from deployed Supabase Edge Function.'
   );
 }
 

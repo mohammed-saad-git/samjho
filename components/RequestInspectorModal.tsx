@@ -3,6 +3,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { detectPII } from '@/lib/detect';
+import { getFrontendEnvStatus } from '@/lib/env';
 import type { LanguageCode } from '@/lib/i18n/languages';
 
 interface RequestInspectorModalProps {
@@ -27,6 +28,10 @@ export function RequestInspectorModal({
   };
 
   const jsonPreview = JSON.stringify(payload, null, 2);
+  const envStatus = getFrontendEnvStatus();
+  const endpointLabel = envStatus.ok
+    ? envStatus.config.explainFunctionUrl
+    : 'https://<project-ref>.supabase.co/functions/v1/explain';
   const serverGuardFindings = detectPII(redactedText).filter((f) =>
     ['AADHAAR', 'PAN', 'PHONE', 'EMAIL'].includes(f.category)
   );
@@ -71,9 +76,9 @@ export function RequestInspectorModal({
 
           <div className="space-y-3 overflow-y-auto p-4 sm:p-5">
             <p id="inspector-desc" className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              This exact JSON body is what leaves your browser to{' '}
-              <code className="font-mono-code">POST /api/explain</code>. Your local vault mapping
-              never leaves memory.
+              This exact JSON body is sent with your public Supabase anon Bearer token to the{' '}
+              <code className="font-mono-code">POST {endpointLabel}</code> Edge Function. Your local
+              vault mapping never leaves memory.
             </p>
 
             <div className="flex flex-wrap items-center gap-2 font-mono-code text-xs">

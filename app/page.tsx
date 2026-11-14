@@ -12,8 +12,9 @@ import { SplitWorkspace, type ManualSpan } from '@/components/SplitWorkspace';
 import { detectPII, redactDocument, SessionVault } from '@/lib/detect';
 import { extractTextFromImage } from '@/lib/extract/ocr';
 import { extractTextFromPdf } from '@/lib/extract/pdf';
+import { getFrontendEnvStatus } from '@/lib/env';
 import { SUPPORTED_LANGUAGES, type LanguageCode } from '@/lib/i18n/languages';
-import { ExplainResponseSchema, type ExplainResponse } from '@/lib/llm/schema';
+import { getLLMProvider, type ExplainResponse } from '@/lib/llm';
 import { getPreGeneratedSampleResponse, type SampleDocumentInfo } from '@/lib/samples';
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -252,22 +253,11 @@ export default function HomePage() {
       setHasSentToServer(true);
 
       try {
-        const response = await fetch('/api/explain', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            redactedText: redactionState.redactedText,
-            targetLanguage: lang,
-            ...(documentHint ? { documentHint } : {}),
-          }),
+        const validated = await getLLMProvider().explain({
+          redactedText: redactionState.redactedText,
+          targetLanguage: lang,
+          ...(documentHint ? { documentHint } : {}),
         });
-
-        const body = (await response.json()) as { error?: string };
-        if (!response.ok) {
-          throw new Error(body.error ?? 'Could not explain this document right now.');
-        }
-
-        const validated = ExplainResponseSchema.parse(body);
         setExplanation(validated);
         setResultSource('live');
         setLiveAnnouncement(`Explanation ready in ${lang}.`);
@@ -309,6 +299,7 @@ export default function HomePage() {
   };
 
   const selectedLangConfig = SUPPORTED_LANGUAGES.find((l) => l.code === targetLanguage);
+  const envStatus = useMemo(() => getFrontendEnvStatus(), []);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -327,6 +318,25 @@ export default function HomePage() {
       </div>
 
       <main className="mx-auto w-full max-w-6xl flex-1 space-y-6 px-4 py-6 sm:px-6">
+        {!envStatus.ok ? (
+          <div
+            role="alert"
+            className="rounded-[6px] border px-4 py-3 text-sm"
+            style={{
+              borderColor: 'var(--risk-high)',
+              backgroundColor: 'var(--risk-high-surface)',
+              color: 'var(--risk-high)',
+            }}
+          >
+            <p className="font-medium">Live explanation backend is not configured yet.</p>
+            <p className="mt-1 font-mono-code text-xs">{envStatus.message}</p>
+            <p className="mt-1 text-xs">
+              On-device detection, redaction preview, and pre-generated sample documents still work
+              offline.
+            </p>
+          </div>
+        ) : null}
+
         <DocumentUpload
           isExtracting={isExtracting}
           extractionMessage={extractionMessage}

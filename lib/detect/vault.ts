@@ -1,4 +1,4 @@
-import type { Finding, PIICategory } from './types';
+import type { Finding, PIICategory } from './types.ts';
 
 const KNOWN_CATEGORIES: readonly PIICategory[] = [
   'AADHAAR',

@@ -1,5 +1,5 @@
-import type { CandidateMatch } from './types';
-import { validateVerhoeff } from './verhoeff';
+import type { CandidateMatch } from './types.ts';
+import { validateVerhoeff } from './verhoeff.ts';
 
 const MONTH_PATTERN =
   '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';

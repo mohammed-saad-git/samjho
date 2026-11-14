@@ -1,6 +1,11 @@
-import { detectPatternMatches } from './patterns';
-import { detectNames } from './names';
-import type { CandidateMatch, CategoryScoreDetail, PIICategory, PrivacyScoreReport } from './types';
+import { detectPatternMatches } from './patterns.ts';
+import { detectNames } from './names.ts';
+import type {
+  CandidateMatch,
+  CategoryScoreDetail,
+  PIICategory,
+  PrivacyScoreReport,
+} from './types.ts';
 
 interface CategoryWeightConfig {
   weight: number;
