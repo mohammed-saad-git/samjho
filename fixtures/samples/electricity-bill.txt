@@ -1,0 +1,23 @@
+DAKSHIN BHARAT POWER DISTRIBUTION CO. LTD.
+MONTHLY ELECTRICITY BILL AND DISCONNECTION CAUTION NOTICE
+Bill Date: 04 Nov 2026 | Billing Cycle: Oct 2026
+------------------------------------------------------------
+Consumer Name: Shri Rameshwar Prasad Sharma
+Consumer No: KA-BLR-88412903
+Aadhaar Linked: 4928 7163 5040
+Mobile: +91 98450 67123
+Email: rameshwar.sharma@example.com
+UPI Autopay VPA: rameshwar.sharma@okicici
+Billing Address: Flat 304, 14th Cross, Indiranagar Stage 2, Bengaluru - 560038
+------------------------------------------------------------
+Meter Reading: Previous 14,820 kWh | Current 15,140 kWh (320 units)
+Current Energy & Fixed Charges: Rs. 2,140.00
+Previous Unpaid Arrears (Sep 2026): Rs. 4,580.00
+Late Payment Surcharge: Rs. 250.00
+Total Amount Payable: Rs. 6,970.00
+------------------------------------------------------------
+Payment Due Date: 25 Nov 2026
+Notice: If Rs. 6,970.00 is not paid by 25 Nov 2026, power supply may be
+disconnected after 05 Dec 2026 under Clause 14 of Supply Code.
+To dispute meter reading, submit a written request at Sub-Division Office 4
+before 22 Nov 2026 with Consumer No KA-BLR-88412903.

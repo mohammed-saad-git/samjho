@@ -1,0 +1,898 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import sharp from 'sharp';
+import {
+  computePrivacyScore,
+  detectPII,
+  generateVerhoeffChecksum,
+  redactText,
+  SessionVault,
+} from '../lib/detect';
+import {
+  ExplainResponseSchema,
+  type ExplainResponse,
+  type TargetLanguage,
+} from '../lib/llm/schema';
+
+function formatAadhaar(digits: string): string {
+  return `${digits.slice(0, 4)} ${digits.slice(4, 8)} ${digits.slice(8, 12)}`;
+}
+
+const AADHAAR_1 = formatAadhaar(generateVerhoeffChecksum('49287163504'));
+const AADHAAR_2 = formatAadhaar(generateVerhoeffChecksum('63819245710'));
+const AADHAAR_3 = formatAadhaar(generateVerhoeffChecksum('74523819602'));
+const AADHAAR_4 = formatAadhaar(generateVerhoeffChecksum('58192046371'));
+
+export interface SampleDocSpec {
+  id: string;
+  filename: string;
+  kind: 'pdf' | 'image';
+  title: string;
+  subtitle: string;
+  documentHint: string;
+  lines: string[];
+}
+
+export const SAMPLE_SPECS: readonly SampleDocSpec[] = [
+  {
+    id: 'electricity-bill',
+    filename: 'electricity-bill.pdf',
+    kind: 'pdf',
+    title: 'Electricity bill with arrears',
+    subtitle: 'PDF · Dakshin Bharat Power Distribution',
+    documentHint: 'Electricity bill',
+    lines: [
+      'DAKSHIN BHARAT POWER DISTRIBUTION CO. LTD.',
+      'MONTHLY ELECTRICITY BILL AND DISCONNECTION CAUTION NOTICE',
+      'Bill Date: 04 Nov 2026 | Billing Cycle: Oct 2026',
+      '------------------------------------------------------------',
+      'Consumer Name: Shri Rameshwar Prasad Sharma',
+      'Consumer No: KA-BLR-88412903',
+      `Aadhaar Linked: ${AADHAAR_1}`,
+      'Mobile: +91 98450 67123',
+      'Email: rameshwar.sharma@example.com',
+      'UPI Autopay VPA: rameshwar.sharma@okicici',
+      'Billing Address: Flat 304, 14th Cross, Indiranagar Stage 2, Bengaluru - 560038',
+      '------------------------------------------------------------',
+      'Meter Reading: Previous 14,820 kWh | Current 15,140 kWh (320 units)',
+      'Current Energy & Fixed Charges: Rs. 2,140.00',
+      'Previous Unpaid Arrears (Sep 2026): Rs. 4,580.00',
+      'Late Payment Surcharge: Rs. 250.00',
+      'Total Amount Payable: Rs. 6,970.00',
+      '------------------------------------------------------------',
+      'Payment Due Date: 25 Nov 2026',
+      'Notice: If Rs. 6,970.00 is not paid by 25 Nov 2026, power supply may be',
+      'disconnected after 05 Dec 2026 under Clause 14 of Supply Code.',
+      'To dispute meter reading, submit a written request at Sub-Division Office 4',
+      'before 22 Nov 2026 with Consumer No KA-BLR-88412903.',
+    ],
+  },
+  {
+    id: 'bank-loan-notice',
+    filename: 'bank-loan-notice.pdf',
+    kind: 'pdf',
+    title: 'Bank overdue loan notice',
+    subtitle: 'PDF · Bharatiya Cooperative Bank',
+    documentHint: 'Bank loan notice',
+    lines: [
+      'BHARATIYA COOPERATIVE BANK LTD. (RECOVERY & CREDIT CELL)',
+      'FIRST REMINDER NOTICE: OVERDUE PERSONAL LOAN INSTALLMENTS',
+      'Notice Date: 08 Nov 2026 | Ref: BCBL/REC/2026/1184',
+      '------------------------------------------------------------',
+      'Dear Smt. Ananya Deshmukh,',
+      'Loan A/c: BCBL-LN-2024-004819',
+      'PAN: AZSPD4819K',
+      'DOB: 14/08/1984',
+      'IFSC: BCBL0000142',
+      'Registered Mobile: 98204 51920',
+      'Residential Address: House No. 18, Sector 9, Vashi, Navi Mumbai - 400703',
+      '------------------------------------------------------------',
+      'Your monthly EMI of Rs. 9,225.00 for September 2026 and October 2026 remains unpaid.',
+      'Overdue EMI Principal and Interest (2 months): Rs. 18,450.00',
+      'Accrued Penal Charges (2% per month): Rs. 620.00',
+      'Total Overdue Amount to Regularize: Rs. 19,070.00',
+      '------------------------------------------------------------',
+      'Action Required by 30 Nov 2026:',
+      'Please deposit Rs. 19,070.00 into Loan A/c BCBL-LN-2024-004819 or visit',
+      'the Vashi Branch with a restructuring application by 30 Nov 2026.',
+      'Continued default beyond 30 Nov 2026 may be reported to credit bureaus',
+      'under RBI guidelines and attract recovery proceedings.',
+    ],
+  },
+  {
+    id: 'rental-agreement',
+    filename: 'rental-agreement.pdf',
+    kind: 'pdf',
+    title: 'Rental agreement excerpt',
+    subtitle: 'PDF · Residential Leave & License',
+    documentHint: 'Rental agreement',
+    lines: [
+      'RESIDENTIAL LEAVE AND LICENSE AGREEMENT (SUMMARY EXCERPT)',
+      'Executed on: 10 Nov 2026 | Term: 11 Months (01 Dec 2026 to 31 Oct 2027)',
+      '------------------------------------------------------------',
+      'Lessor: Mr. Sundaramurthy Natarajan',
+      `Lessor Aadhaar: ${AADHAAR_2} | Lessor PAN: BKNPN7291M`,
+      'Tenant: Ms. Kavitha Rajagopal',
+      `Tenant Aadhaar: ${AADHAAR_3} | Passport: L4829103`,
+      'Tenant Mobile: +91 94441 82309 | Email: kavitha.rajagopal@example.in',
+      'Property Address: Door No. 12, Second Main Road, Adyar, Chennai - 600020',
+      '------------------------------------------------------------',
+      '1. Monthly License Fee (Rent): Rs. 24,000.00 payable on or before the 5th of each month.',
+      '2. Refundable Security Deposit: Rs. 1,20,000.00 paid prior to handover.',
+      '3. Lock-in and Notice Period: Neither party may terminate during the first 3 months.',
+      '   Thereafter, 60 days prior written notice is required by either party.',
+      '4. Annual Escalation: Rent increases by 5% upon renewal after 31 Oct 2027.',
+      '5. Maintenance and Utilities: Electricity and water bills are paid separately by Tenant.',
+      'Signed by Lessor: Sundaramurthy Natarajan | Signed by Tenant: Kavitha Rajagopal',
+    ],
+  },
+  {
+    id: 'government-notice',
+    filename: 'government-notice.png',
+    kind: 'image',
+    title: 'Government scholarship notice (photo)',
+    subtitle: 'PNG photo scan · On-device Tesseract OCR',
+    documentHint: 'Government notice',
+    lines: [
+      'DIRECTORATE OF SOCIAL WELFARE - SCHOLARSHIP CELL',
+      'VERIFICATION & DISBURSEMENT INTIMATION NOTICE',
+      'Date: 06 Nov 2026',
+      'Applicant Name: Shri Devendra Kumar Verma',
+      'Application No: SW-UP-2026-99412',
+      `Aadhaar Number: ${AADHAAR_4}`,
+      'Date of Birth: 19 May 2004',
+      'Mobile: 94150 28374',
+      'Bank Account No: 320988410052',
+      'IFSC: SBIN0004123',
+      'Address: Plot 47, Gomti Nagar Extension, Lucknow - 226010',
+      'Approved Scholarship Grant: Rs. 18,500.00',
+      'Status: Pending biometric and bank seeding verification.',
+      'Important: Submit self-attested income certificate and',
+      'institution bonafide letter at District Welfare Office',
+      'on or before 10 Dec 2026, otherwise the grant of',
+      'Rs. 18,500.00 will lapse for the 2026-27 cycle.',
+    ],
+  },
+];
+
+async function buildPdf(lines: string[], outPath: string): Promise<void> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595.28, 841.89]); // A4
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  let y = 785;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    const isHeading = i < 2;
+    page.drawText(line, {
+      x: 50,
+      y,
+      size: isHeading ? 12 : 10.5,
+      font: isHeading ? boldFont : font,
+      color: rgb(0.08, 0.075, 0.06),
+    });
+    y -= isHeading ? 22 : 18;
+  }
+
+  const bytes = await doc.save();
+  fs.writeFileSync(outPath, bytes);
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function buildPhotoPng(lines: string[], outPath: string): Promise<void> {
+  const width = 1360;
+  const height = 1040;
+  const lineStartY = 128;
+  const lineStep = 48;
+
+  const textNodes = lines
+    .map((line, idx) => {
+      const y = lineStartY + idx * lineStep;
+      const isTitle = idx < 2;
+      return `<text x="96" y="${y}" font-family="DejaVu Sans, Arial, Helvetica, sans-serif" font-size="${
+        isTitle ? 26 : 22
+      }" font-weight="${isTitle ? '700' : '400'}" fill="#181713">${escapeXml(line)}</text>`;
+    })
+    .join('\n');
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <rect width="${width}" height="${height}" fill="#DDD7CA" />
+      <g transform="rotate(0 ${width / 2} ${height / 2})">
+        <rect x="44" y="40" width="${width - 88}" height="${height - 80}" rx="4" fill="#F8F5EE" stroke="#BEB7A7" stroke-width="2" />
+        <line x1="96" y1="196" x2="${width - 96}" y2="196" stroke="#181713" stroke-width="2" />
+        ${textNodes}
+        <rect x="${width - 330}" y="${height - 170}" width="210" height="72" fill="none" stroke="#36486B" stroke-width="2.5" rx="3" />
+        <text x="${width - 225}" y="${height - 135}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="700" fill="#36486B">VERIFIED SEAL</text>
+        <text x="${width - 225}" y="${height - 114}" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="12" fill="#36486B">SOCIAL WELFARE CELL</text>
+      </g>
+    </svg>
+  `;
+
+  await sharp(Buffer.from(svg)).png({ quality: 95 }).toFile(outPath);
+}
+
+const SAMPLE_RESPONSES: Record<string, Record<TargetLanguage, ExplainResponse>> = {
+  'electricity-bill': {
+    en: {
+      documentType: 'Electricity Bill & Disconnection Caution Notice',
+      summary:
+        'This is a monthly electricity bill for [PERSON_01] (Consumer No. [ACCOUNT_01]) from Dakshin Bharat Power Distribution Co. Ltd. The total payable amount is Rs. 6,970.00, which includes Rs. 2,140.00 for October 2026 usage plus Rs. 4,580.00 in unpaid previous arrears and Rs. 250.00 in late charges. Payment is due by 25 Nov 2026 to avoid disconnection after 05 Dec 2026.',
+      keyFacts: [
+        { label: 'Consumer', value: '[PERSON_01]' },
+        { label: 'Consumer Number', value: '[ACCOUNT_01]' },
+        { label: 'Meter Reading', value: '14,820 to 15,140 kWh (320 units)' },
+        { label: 'Linked Payment VPA', value: '[UPI_01]' },
+        { label: 'Billing Address', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        {
+          date: '22 Nov 2026',
+          what: 'Last date to submit a written meter reading dispute at Sub-Division Office 4',
+        },
+        { date: '25 Nov 2026', what: 'Due date to pay Rs. 6,970.00' },
+        { date: '05 Dec 2026', what: 'Earliest date power supply may be disconnected if unpaid' },
+      ],
+      amounts: [
+        { value: 'Rs. 2,140.00', what: 'Current October 2026 energy and fixed charges' },
+        { value: 'Rs. 4,580.00', what: 'Previous unpaid arrears from September 2026' },
+        { value: 'Rs. 250.00', what: 'Late payment surcharge' },
+        { value: 'Rs. 6,970.00', what: 'Total amount payable' },
+      ],
+      watchOuts: [
+        'More than half of the bill (Rs. 4,580.00) comes from unpaid September 2026 arrears. Check your previous payment receipts before paying again.',
+        'You have an autopay handle [UPI_01] listed, so verify whether September autopay failed before making a duplicate manual payment.',
+        'Disconnection can begin after 05 Dec 2026 if the balance remains unpaid past 25 Nov 2026.',
+      ],
+      nextSteps: [
+        'Check your bank or UPI history for [UPI_01] to confirm whether Rs. 4,580.00 for September 2026 was already debited.',
+        'If you already paid September arrears or believe 320 units is inaccurate, submit a written dispute with receipt copies at Sub-Division Office 4 before 22 Nov 2026.',
+        'Pay the confirmed balance of Rs. 6,970.00 by 25 Nov 2026 and save the payment reference number.',
+      ],
+      draftReply:
+        'To,\nThe Assistant Engineer,\nSub-Division Office 4,\nDakshin Bharat Power Distribution Co. Ltd.\n\nSubject: Verification of Arrears and Meter Reading for Consumer No. [ACCOUNT_01]\n\nSir/Madam,\n\nI, [PERSON_01], holder of Consumer No. [ACCOUNT_01] at [ADDRESS_01], received the electricity bill dated 04 Nov 2026 for Rs. 6,970.00 (due 25 Nov 2026). Please review the previous arrears entry of Rs. 4,580.00 against my September 2026 payment records attached with this letter and confirm the final payable balance before 25 Nov 2026.\n\nYou may contact me on [PHONE_01] or [EMAIL_01].\n\nYours faithfully,\n[PERSON_01]',
+    },
+    hi: {
+      documentType: 'बिजली बिल और कनेक्शन काटने की चेतावनी सूचना',
+      summary:
+        'यह दक्षिण भारत पावर डिस्ट्रीब्यूशन कंपनी लिमिटेड की ओर से [PERSON_01] (उपभोक्ता संख्या [ACCOUNT_01]) के लिए मासिक बिजली बिल है। कुल देय राशि Rs. 6,970.00 है, जिसमें अक्टूबर 2026 की खपत के Rs. 2,140.00, सितंबर 2026 का पिछला बकाया Rs. 4,580.00 और विलंब शुल्क Rs. 250.00 शामिल हैं। 05 Dec 2026 के बाद बिजली कटौती से बचने के लिए भुगतान 25 Nov 2026 तक करना होगा।',
+      keyFacts: [
+        { label: 'उपभोक्ता', value: '[PERSON_01]' },
+        { label: 'उपभोक्ता संख्या', value: '[ACCOUNT_01]' },
+        { label: 'मीटर रीडिंग', value: '14,820 से 15,140 kWh (320 यूनिट)' },
+        { label: 'लिंक्ड UPI', value: '[UPI_01]' },
+        { label: 'बिलिंग पता', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '22 Nov 2026', what: 'मीटर रीडिंग पर लिखित आपत्ति दर्ज करने की अंतिम तिथि' },
+        { date: '25 Nov 2026', what: 'Rs. 6,970.00 भुगतान करने की अंतिम तिथि' },
+        { date: '05 Dec 2026', what: 'भुगतान न होने पर इस तारीख के बाद बिजली कनेक्शन कट सकता है' },
+      ],
+      amounts: [
+        { value: 'Rs. 2,140.00', what: 'अक्टूबर 2026 का वर्तमान बिजली और फिक्स शुल्क' },
+        { value: 'Rs. 4,580.00', what: 'सितंबर 2026 का पिछला बकाया' },
+        { value: 'Rs. 250.00', what: 'विलंब भुगतान अधिभार' },
+        { value: 'Rs. 6,970.00', what: 'कुल देय राशि' },
+      ],
+      watchOuts: [
+        'कुल बिल का आधे से अधिक हिस्सा (Rs. 4,580.00) सितंबर 2026 के पिछले बकाया से है। दोबारा भुगतान करने से पहले पुरानी रसीद अवश्य जांचें।',
+        '[UPI_01] ऑटोपे जुड़ा हुआ है, इसलिए जांचें कि सितंबर का भुगतान विफल हुआ था या नहीं।',
+        '25 Nov 2026 तक भुगतान न होने पर 05 Dec 2026 के बाद कनेक्शन काटा जा सकता है।',
+      ],
+      nextSteps: [
+        '[UPI_01] से जुड़े बैंक या UPI ऐप में जांचें कि सितंबर 2026 के Rs. 4,580.00 पहले से कटे हैं या नहीं।',
+        'यदि पिछला बिल भरा जा चुका है या 320 यूनिट गलत लग रही है, तो 22 Nov 2026 से पहले उप-मंडल कार्यालय 4 में रसीद के साथ लिखित आवेदन दें।',
+        '25 Nov 2026 तक सही राशि का भुगतान करें और रसीद सुरक्षित रखें।',
+      ],
+      draftReply:
+        'सेवा में,\nसहायक अभियंता,\nउप-मंडल कार्यालय 4,\nदक्षिण भारत पावर डिस्ट्रीब्यूशन कंपनी लिमिटेड।\n\nविषय: उपभोक्ता संख्या [ACCOUNT_01] के बकाया एवं मीटर रीडिंग की जांच हेतु आवेदन।\n\nमहोदय/महोदया,\n\nमैं [PERSON_01] (उपभोक्ता संख्या [ACCOUNT_01], पता [ADDRESS_01]) हूँ। मुझे 04 Nov 2026 का Rs. 6,970.00 का बिजली बिल प्राप्त हुआ है। कृपया इसमें शामिल सितंबर 2026 के Rs. 4,580.00 के बकाया की संलग्न रसीदों से जांच कर 25 Nov 2026 से पहले सही राशि की पुष्टि करें।\n\nसंपर्क: [PHONE_01] / [EMAIL_01]\n\nभवदीय,\n[PERSON_01]',
+    },
+    kn: {
+      documentType: 'ವಿದ್ಯುತ್ ಬಿಲ್ ಮತ್ತು ಸಂಪರ್ಕ ಕಡಿತ ಎಚ್ಚರಿಕೆ ನೋಟಿಸ್',
+      summary:
+        'ಇದು ದಕ್ಷಿಣ ಭಾರತ ಪವರ್ ಡಿಸ್ಟ್ರಿಬ್ಯೂಷನ್ ಕಂಪನಿ ಲಿಮಿಟೆಡ್‌ನಿಂದ [PERSON_01] (ಗ್ರಾಹಕ ಸಂಖ್ಯೆ [ACCOUNT_01]) ಅವರಿಗೆ ಬಂದಿರುವ ಮಾಸಿಕ ವಿದ್ಯುತ್ ಬಿಲ್ ಆಗಿದೆ. ಒಟ್ಟು ಪಾವತಿಸಬೇಕಾದ ಮೊತ್ತ Rs. 6,970.00. ಇದರಲ್ಲಿ ಅಕ್ಟೋಬರ್ 2026ರ ಶುಲ್ಕ Rs. 2,140.00, ಸೆಪ್ಟೆಂಬರ್ 2026ರ ಬಾಕಿ Rs. 4,580.00 ಮತ್ತು ವಿಳಂಬ ಶುಲ್ಕ Rs. 250.00 ಸೇರಿದೆ. 05 Dec 2026 ನಂತರ ವಿದ್ಯುತ್ ಕಡಿತ ತಪ್ಪಿಸಲು 25 Nov 2026ರೊಳಗೆ ಪಾವತಿಸಬೇಕು.',
+      keyFacts: [
+        { label: 'ಗ್ರಾಹಕರು', value: '[PERSON_01]' },
+        { label: 'ಗ್ರಾಹಕ ಸಂಖ್ಯೆ', value: '[ACCOUNT_01]' },
+        { label: 'ಮೀಟರ್ ರೀಡಿಂಗ್', value: '14,820 ರಿಂದ 15,140 kWh (320 ಯೂನಿಟ್)' },
+        { label: 'UPI ಐಡಿ', value: '[UPI_01]' },
+        { label: 'ವಿಳಾಸ', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '22 Nov 2026', what: 'ಮೀಟರ್ ರೀಡಿಂಗ್ ಆಕ್ಷೇಪಣೆ ಸಲ್ಲಿಸಲು ಕೊನೆಯ ದಿನಾಂಕ' },
+        { date: '25 Nov 2026', what: 'Rs. 6,970.00 ಪಾವತಿಸಲು ಕೊನೆಯ ದಿನಾಂಕ' },
+        { date: '05 Dec 2026', what: 'ಪಾವತಿಸದಿದ್ದರೆ ಈ ದಿನಾಂಕದ ನಂತರ ವಿದ್ಯುತ್ ಕಡಿತಗೊಳ್ಳಬಹುದು' },
+      ],
+      amounts: [
+        { value: 'Rs. 2,140.00', what: 'ಅಕ್ಟೋಬರ್ 2026ರ ಪ್ರಸ್ತುತ ವಿದ್ಯುತ್ ಶುಲ್ಕ' },
+        { value: 'Rs. 4,580.00', what: 'ಸೆಪ್ಟೆಂಬರ್ 2026ರ ಹಳೆಯ ಬಾಕಿ' },
+        { value: 'Rs. 250.00', what: 'ವಿಳಂಬ ಶುಲ್ಕ' },
+        { value: 'Rs. 6,970.00', what: 'ಒಟ್ಟು ಪಾವತಿಸಬೇಕಾದ ಮೊತ್ತ' },
+      ],
+      watchOuts: [
+        'ಒಟ್ಟು ಬಿಲ್‌ನ ಅರ್ಧಕ್ಕಿಂತ ಹೆಚ್ಚು (Rs. 4,580.00) ಸೆಪ್ಟೆಂಬರ್ 2026ರ ಹಳೆಯ ಬಾಕಿಯಾಗಿದೆ. ಹಳೆಯ ರಶೀದಿಗಳನ್ನು ಪರಿಶೀಲಿಸಿ.',
+        '[UPI_01] ಮೂಲಕ ಆಟೋಪೇ ವಿಫಲವಾಗಿದೆಯೇ ಎಂದು ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಿ.',
+      ],
+      nextSteps: [
+        '[UPI_01] ಖಾತೆಯಲ್ಲಿ ಸೆಪ್ಟೆಂಬರ್ 2026ರ Rs. 4,580.00 ಪಾವತಿಯಾಗಿದೆಯೇ ಎಂದು ಪರಿಶೀಲಿಸಿ.',
+        'ತಪ್ಪು ಇದ್ದರೆ 22 Nov 2026ರೊಳಗೆ ಉಪ-ವಿಭಾಗ ಕಚೇರಿ 4ರಲ್ಲಿ ಲಿಖಿತ ಅರ್ಜಿ ಸಲ್ಲಿಸಿ.',
+        '25 Nov 2026ರೊಳಗೆ ಬಾಕಿ ಮೊತ್ತವನ್ನು ಪಾವತಿಸಿ ರಶೀದಿ ಉಳಿಸಿಕೊಳ್ಳಿ.',
+      ],
+      draftReply:
+        'ಗೆ,\nಸಹಾಯಕ ಅಭಿಯಂತರರು,\nಉಪ-ವಿಭಾಗ ಕಚೇರಿ 4,\nದಕ್ಷಿಣ ಭಾರತ ಪವರ್ ಡಿಸ್ಟ್ರಿಬ್ಯೂಷನ್ ಕಂಪನಿ ಲಿಮಿಟೆಡ್.\n\nವಿಷಯ: ಗ್ರಾಹಕ ಸಂಖ್ಯೆ [ACCOUNT_01] ಬಿಲ್ ಬಾಕಿ ಪರಿಶೀಲನೆ ಕುರಿತು.\n\nಮಾನ್ಯರೇ,\n\nನಾನು [PERSON_01] (ಗ್ರಾಹಕ ಸಂಖ್ಯೆ [ACCOUNT_01], ವಿಳಾಸ [ADDRESS_01]). ದಿನಾಂಕ 04 Nov 2026ರ Rs. 6,970.00 ಬಿಲ್‌ನಲ್ಲಿರುವ Rs. 4,580.00 ಹಳೆಯ ಬಾಕಿಯನ್ನು ನನ್ನ ಪಾವತಿ ರಶೀದಿಗಳೊಂದಿಗೆ ಪರಿಶೀಲಿಸಿ 25 Nov 2026ರೊಳಗೆ ಸರಿಯಾದ ಮೊತ್ತವನ್ನು ತಿಳಿಸಬೇಕಾಗಿ ವಿನಂತಿ.\n\nಸಂಪರ್ಕ: [PHONE_01] / [EMAIL_01]\n\nಇಂತಿ ನಿಮ್ಮ ವಿಶ್ವಾಸಿ,\n[PERSON_01]',
+    },
+    ta: {
+      documentType: 'மின்சாரக் கட்டண ரசீது மற்றும் மின் இணைப்பு துண்டிப்பு எச்சரிக்கை',
+      summary:
+        'தக்ஷிண் பாரத் மின் பகிர்மான நிறுவனத்திடமிருந்து [PERSON_01] (நுகர்வோர் எண் [ACCOUNT_01]) அவர்களுக்கு வந்துள்ள மாதாந்திர மின்சாரக் கட்டண அறிக்கை இதுவாகும். மொத்தமாக செலுத்த வேண்டிய தொகை Rs. 6,970.00 ஆகும். இதில் அக்டோபர் 2026 கட்டணம் Rs. 2,140.00, செப்டம்பர் 2026 நிலுவைத் தொகை Rs. 4,580.00 மற்றும் தாமதக் கட்டணம் Rs. 250.00 அடங்கும். 05 Dec 2026க்குப் பிறகு மின் இணைப்பு துண்டிப்பைத் தவிர்க்க 25 Nov 2026க்குள் செலுத்த வேண்டும்.',
+      keyFacts: [
+        { label: 'நுகர்வோர்', value: '[PERSON_01]' },
+        { label: 'நுகர்வோர் எண்', value: '[ACCOUNT_01]' },
+        { label: 'மீட்டர் அளவு', value: '14,820 முதல் 15,140 kWh (320 யூனிட்கள்)' },
+        { label: 'இணைக்கப்பட்ட UPI', value: '[UPI_01]' },
+        { label: 'முகவரி', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '22 Nov 2026', what: 'மீட்டர் அளவு குறித்து எழுத்துப்பூர்வ புகார் அளிக்க கடைசி தேதி' },
+        { date: '25 Nov 2026', what: 'Rs. 6,970.00 செலுத்த கடைசி தேதி' },
+        {
+          date: '05 Dec 2026',
+          what: 'கட்டணம் செலுத்தாத பட்சத்தில் இந்த தேதிக்குப் பிறகு மின் இணைப்பு துண்டிக்கப்படலாம்',
+        },
+      ],
+      amounts: [
+        { value: 'Rs. 2,140.00', what: 'அக்டோபர் 2026 நடப்பு மின் கட்டணம்' },
+        { value: 'Rs. 4,580.00', what: 'செப்டம்பர் 2026 நிலுவைத் தொகை' },
+        { value: 'Rs. 250.00', what: 'தாமதக் கட்டணம்' },
+        { value: 'Rs. 6,970.00', what: 'மொத்த செலுத்த வேண்டிய தொகை' },
+      ],
+      watchOuts: [
+        'மொத்த தொகையில் பாதிக்கு மேல் (Rs. 4,580.00) செப்டம்பர் 2026 நிலுவையாக உள்ளது. பழைய ரசீதுகளைச் சரிபார்க்கவும்.',
+        '[UPI_01] மூலம் ஆட்டோபே தோல்வியடைந்ததா என்பதைச் சரிபார்க்கவும்.',
+      ],
+      nextSteps: [
+        '[UPI_01] கணக்கில் செப்டம்பர் மாத Rs. 4,580.00 ஏற்கனவே செலுத்தப்பட்டுள்ளதா என்பதைப் பார்க்கவும்.',
+        'தவறு இருந்தால் 22 Nov 2026க்கு முன் துணைக் கோட்ட அலுவலகம் 4-ல் மனு அளிக்கவும்.',
+        '25 Nov 2026க்குள் உறுதிப்படுத்தப்பட்ட தொகையைச் செலுத்தி ரசீதைச் சேமிக்கவும்.',
+      ],
+      draftReply:
+        'பெறுநர்,\nஉதவிப் பொறியாளர்,\nதுணைக் கோட்ட அலுவலகம் 4,\nதக்ஷிண் பாரத் மின் பகிர்மான நிறுவனம்.\n\nபொருள்: நுகர்வோர் எண் [ACCOUNT_01] நிலுவைத் தொகை சரிபார்ப்பு.\n\nஐயா/அம்மா,\n\nநான் [PERSON_01] (நுகர்வோர் எண் [ACCOUNT_01], முகவரி [ADDRESS_01]). 04 Nov 2026 தேதியிட்ட Rs. 6,970.00 பில்லில் உள்ள Rs. 4,580.00 நிலுவைத் தொகையை எனது கட்டண ரசீதுகளுடன் சரிபார்த்து 25 Nov 2026க்கு முன் சரியான தொகையைத் தெரிவிக்குமாறு கேட்டுக்கொள்கிறேன்.\n\nதொடர்புக்கு: [PHONE_01] / [EMAIL_01]\n\nஇப்படிக்கு,\n[PERSON_01]',
+    },
+    te: {
+      documentType: 'విద్యుత్ బిల్లు మరియు సరఫరా నిలిపివేత హెచ్చరిక నోటీసు',
+      summary:
+        'దక్షిణ్ భారత్ పవర్ డిస్ట్రిబ్యూషన్ కంపెనీ లిమిటెడ్ నుండి [PERSON_01] (వినియోగదారు సంఖ్య [ACCOUNT_01]) కోసం వచ్చిన నెలవారీ విద్యుత్ బిల్లు ఇది. మొత్తం చెల్లించాల్సిన మొత్తం Rs. 6,970.00. ఇందులో అక్టోబర్ 2026 ఛార్జీలు Rs. 2,140.00, సెప్టెంబర్ 2026 పాత బకాయిలు Rs. 4,580.00 మరియు ఆలస్య రుసుము Rs. 250.00 ఉన్నాయి. 05 Dec 2026 తర్వాత కనెక్షన్ కట్ కాకుండా ఉండేందుకు 25 Nov 2026 లోపు చెల్లించాలి.',
+      keyFacts: [
+        { label: 'వినియోగదారు', value: '[PERSON_01]' },
+        { label: 'వినియోగదారు సంఖ్య', value: '[ACCOUNT_01]' },
+        { label: 'మీటర్ రీడింగ్', value: '14,820 నుండి 15,140 kWh (320 యూనిట్లు)' },
+        { label: 'లింక్ చేసిన UPI', value: '[UPI_01]' },
+        { label: 'చిరునామా', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '22 Nov 2026', what: 'మీటర్ రీడింగ్‌పై అభ్యంతరం తెలపడానికి చివరి తేదీ' },
+        { date: '25 Nov 2026', what: 'Rs. 6,970.00 చెల్లించడానికి చివరి తేదీ' },
+        { date: '05 Dec 2026', what: 'చెల్లించకపోతే ఈ తేదీ తర్వాత విద్యుత్ సరఫరా నిలిపివేయవచ్చు' },
+      ],
+      amounts: [
+        { value: 'Rs. 2,140.00', what: 'అక్టోబర్ 2026 ప్రస్తుత విద్యుత్ ఛార్జీలు' },
+        { value: 'Rs. 4,580.00', what: 'సెప్టెంబర్ 2026 పాత బకాయిలు' },
+        { value: 'Rs. 250.00', what: 'ఆలస్య చెల్లింపు ఛార్జీ' },
+        { value: 'Rs. 6,970.00', what: 'మొత్తం చెల్లించాల్సిన మొత్తం' },
+      ],
+      watchOuts: [
+        'మొత్తం బిల్లులో సగానికి పైగా (Rs. 4,580.00) సెప్టెంబర్ 2026 పాత బకాయిల నుండి ఉంది. పాత రసీదులను తప్పకుండా తనిఖీ చేయండి.',
+        '[UPI_01] ఆటోపే విఫలమైందా లేదా అని చూసుకోండి.',
+      ],
+      nextSteps: [
+        '[UPI_01] ద్వారా సెప్టెంబర్ బకాయి Rs. 4,580.00 కట్టబడిందా అని తనిఖీ చేయండి.',
+        'తేడా ఉంటే 22 Nov 2026 లోపు సబ్-డివిజన్ ఆఫీస్ 4 లో లిఖితపూర్వక దరఖాస్తు ఇవ్వండి.',
+        '25 Nov 2026 లోపు బిల్లు చెల్లించి రసీదు భద్రపరుచుకోండి.',
+      ],
+      draftReply:
+        'కు,\nసహాయ ఇంజనీర్,\nసబ్-డివిజన్ ఆఫీస్ 4,\nదక్షిణ్ భారత్ పవర్ డిస్ట్రిబ్యూషన్ కంపెనీ లిమిటెడ్.\n\nవిషయం: వినియోగదారు సంఖ్య [ACCOUNT_01] బకాయిల పరిశీలన గురించి.\n\nఅయ్యా/అమ్మా,\n\nనేను [PERSON_01] (వినియోగదారు సంఖ్య [ACCOUNT_01], చిరునామా [ADDRESS_01]). 04 Nov 2026 నాటి Rs. 6,970.00 బిల్లులో ఉన్న Rs. 4,580.00 పాత బకాయిని నా రసీదులతో సరిచూసి 25 Nov 2026 లోపు సరైన మొత్తాన్ని తెలపగలరు.\n\nసంప్రదింపు: [PHONE_01] / [EMAIL_01]\n\nఇట్లు,\n[PERSON_01]',
+    },
+  },
+  'bank-loan-notice': {
+    en: {
+      documentType: 'Overdue Personal Loan First Reminder Notice',
+      summary:
+        'Bharatiya Cooperative Bank Ltd. has sent a first reminder notice to [PERSON_01] for Loan Account [ACCOUNT_01] because two monthly EMIs (September and October 2026) of Rs. 9,225.00 each are overdue. Including Rs. 620.00 in penal interest, the total amount needed to regularize the loan is Rs. 19,070.00 by 30 Nov 2026.',
+      keyFacts: [
+        { label: 'Borrower', value: '[PERSON_01]' },
+        { label: 'Loan Account', value: '[ACCOUNT_01]' },
+        { label: 'Branch IFSC', value: '[IFSC_01]' },
+        { label: 'PAN on Record', value: '[PAN_01]' },
+        { label: 'Registered Mobile', value: '[PHONE_01]' },
+      ],
+      deadlines: [
+        {
+          date: '30 Nov 2026',
+          what: 'Pay Rs. 19,070.00 or submit a loan restructuring request at Vashi Branch',
+        },
+      ],
+      amounts: [
+        { value: 'Rs. 9,225.00', what: 'Single monthly EMI amount' },
+        { value: 'Rs. 18,450.00', what: 'Two missed EMIs (September and October 2026)' },
+        { value: 'Rs. 620.00', what: 'Accrued penal charges (2% per month)' },
+        { value: 'Rs. 19,070.00', what: 'Total overdue amount to regularize account' },
+      ],
+      watchOuts: [
+        'Missing the 30 Nov 2026 deadline can result in negative credit bureau reporting, which affects future loans.',
+        'Penal charges of 2% per month continue accruing while the balance remains unpaid.',
+        'If you cannot pay the full Rs. 19,070.00 immediately, the notice explicitly allows submitting a restructuring application before 30 Nov 2026.',
+      ],
+      nextSteps: [
+        'Verify your bank statement for September and October 2026 to confirm both Rs. 9,225.00 EMIs failed or bounced.',
+        'If you can pay Rs. 19,070.00, transfer it into [ACCOUNT_01] (IFSC [IFSC_01]) before 30 Nov 2026 and collect a regularization receipt.',
+        'If experiencing financial hardship, visit the Vashi Branch before 30 Nov 2026 with a written restructuring request.',
+      ],
+      draftReply:
+        'To,\nThe Branch Manager,\nBharatiya Cooperative Bank Ltd., Vashi Branch\n\nSubject: Regularization / Restructuring Request for Loan A/c [ACCOUNT_01]\n\nSir/Madam,\n\nI, [PERSON_01], borrower under Loan A/c [ACCOUNT_01], acknowledge receipt of your reminder notice dated 08 Nov 2026 regarding overdue EMIs totaling Rs. 19,070.00. I am contacting the branch before 30 Nov 2026 to confirm the exact payoff / restructuring schedule and avoid any adverse credit reporting.\n\nPlease reach me at [PHONE_01].\n\nYours sincerely,\n[PERSON_01]',
+    },
+    hi: {
+      documentType: 'बकाया पर्सनल लोन का प्रथम अनुस्मारक नोटिस',
+      summary:
+        'भारतीय कोऑपरेटिव बैंक लिमिटेड ने [PERSON_01] को ऋण खाता [ACCOUNT_01] के संबंध में पहला रिमाइंडर नोटिस भेजा है। सितंबर और अक्टूबर 2026 की दो मासिक किस्तें (प्रत्येक Rs. 9,225.00) बकाया हैं। Rs. 620.00 दंड शुल्क सहित खाता नियमित करने के लिए 30 Nov 2026 तक कुल Rs. 19,070.00 जमा करने होंगे।',
+      keyFacts: [
+        { label: 'ऋणधारक', value: '[PERSON_01]' },
+        { label: 'लोन खाता', value: '[ACCOUNT_01]' },
+        { label: 'IFSC कोड', value: '[IFSC_01]' },
+        { label: 'पैन', value: '[PAN_01]' },
+        { label: 'मोबाइल', value: '[PHONE_01]' },
+      ],
+      deadlines: [
+        { date: '30 Nov 2026', what: 'Rs. 19,070.00 जमा करने या पुनर्गठन आवेदन देने की अंतिम तिथि' },
+      ],
+      amounts: [
+        { value: 'Rs. 9,225.00', what: 'एक महीने की EMI राशि' },
+        { value: 'Rs. 18,450.00', what: 'दो महीने की बकाया EMI' },
+        { value: 'Rs. 620.00', what: 'दंड ब्याज (2% प्रति माह)' },
+        { value: 'Rs. 19,070.00', what: 'कुल बकाया राशि' },
+      ],
+      watchOuts: [
+        '30 Nov 2026 के बाद भी भुगतान न करने पर क्रेडिट ब्यूरो (CIBIL आदि) में रिपोर्टिंग हो सकती है।',
+        'यदि पूरा भुगतान संभव न हो तो 30 Nov 2026 से पहले शाखा में लोन पुनर्गठन का आवेदन दिया जा सकता है।',
+      ],
+      nextSteps: [
+        'अपने बैंक खाते से जांचें कि सितंबर और अक्टूबर की Rs. 9,225.00 किस्तें वास्तव में बकाया हैं या नहीं।',
+        '30 Nov 2026 से पहले [ACCOUNT_01] में Rs. 19,070.00 जमा करें या वाशी शाखा में पुनर्गठन आवेदन दें।',
+      ],
+      draftReply:
+        'सेवा में,\nशाखा प्रबंधक,\nभारतीय कोऑपरेटिव बैंक लिमिटेड, वाशी शाखा।\n\nविषय: ऋण खाता [ACCOUNT_01] के नियमितीकरण / पुनर्गठन हेतु अनुरोध।\n\nमहोदय/महोदया,\n\nमैं [PERSON_01] (लोन खाता [ACCOUNT_01]) 08 Nov 2026 के नोटिस के संदर्भ में सूचित करता/करती हूँ कि मैं 30 Nov 2026 से पहले बकाया Rs. 19,070.00 के समाधान या पुनर्गठन हेतु शाखा से संपर्क कर रहा/रही हूँ।\n\nसंपर्क: [PHONE_01]\n\nभवदीय,\n[PERSON_01]',
+    },
+    kn: {
+      documentType: 'ಬಾಕಿ ಇರುವ ವೈಯಕ್ತಿಕ ಸಾಲದ ಮೊದಲ ಜ್ಞಾಪನೆ ನೋಟಿಸ್',
+      summary:
+        'ಭಾರತೀಯ ಕೋಆಪರೇಟಿವ್ ಬ್ಯಾಂಕ್ ಲಿಮಿಟೆಡ್ [PERSON_01] ಅವರಿಗೆ ಸಾಲದ ಖಾತೆ [ACCOUNT_01] ಕುರಿತು ಮೊದಲ ನೋಟಿಸ್ ಕಳುಹಿಸಿದೆ. ಸೆಪ್ಟೆಂಬರ್ ಮತ್ತು ಅಕ್ಟೋಬರ್ 2026ರ ಎರಡು EMIಗಳು (ತಲಾ Rs. 9,225.00) ಬಾಕಿ ಇವೆ. Rs. 620.00 ದಂಡ ಶುಲ್ಕ ಸೇರಿ ಒಟ್ಟು Rs. 19,070.00 ಅನ್ನು 30 Nov 2026ರೊಳಗೆ ಪಾವತಿಸಬೇಕು.',
+      keyFacts: [
+        { label: 'ಸಾಲಗಾರರು', value: '[PERSON_01]' },
+        { label: 'ಸಾಲದ ಖಾತೆ', value: '[ACCOUNT_01]' },
+        { label: 'IFSC ಕೋಡ್', value: '[IFSC_01]' },
+        { label: 'PAN', value: '[PAN_01]' },
+      ],
+      deadlines: [
+        {
+          date: '30 Nov 2026',
+          what: 'Rs. 19,070.00 ಪಾವತಿಸಲು ಅಥವಾ ಮರುಹೊಂದಾಣಿಕೆ ಅರ್ಜಿ ಸಲ್ಲಿಸಲು ಕೊನೆಯ ದಿನಾಂಕ',
+        },
+      ],
+      amounts: [
+        { value: 'Rs. 9,225.00', what: 'ತಿಂಗಳ EMI ಮೊತ್ತ' },
+        { value: 'Rs. 18,450.00', what: 'ಎರಡು ತಿಂಗಳ ಬಾಕಿ EMI' },
+        { value: 'Rs. 620.00', what: 'ದಂಡ ಶುಲ್ಕ (ತಿಂಗಳಿಗೆ 2%)' },
+        { value: 'Rs. 19,070.00', what: 'ಒಟ್ಟು ಪಾವತಿಸಬೇಕಾದ ಬಾಕಿ' },
+      ],
+      watchOuts: ['30 Nov 2026ರ ನಂತರ ಪಾವತಿಸದಿದ್ದರೆ ಕ್ರೆಡಿಟ್ ಬ್ಯೂರೋಗೆ ವರದಿ ಮಾಡಲಾಗುತ್ತದೆ.'],
+      nextSteps: [
+        'ನಿಮ್ಮ ಬ್ಯಾಂಕ್ ಸ್ಟೇಟ್‌ಮೆಂಟ್‌ನಲ್ಲಿ ಸೆಪ್ಟೆಂಬರ್-ಅಕ್ಟೋಬರ್ EMIಗಳು ಕಡಿತಗೊಂಡಿಲ್ಲವೇ ಎಂದು ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಿ.',
+        '30 Nov 2026ರೊಳಗೆ [ACCOUNT_01] ಖಾತೆಗೆ Rs. 19,070.00 ಜಮಾ ಮಾಡಿ ಅಥವಾ ವಾಶಿ ಶಾಖೆಯಲ್ಲಿ ಮರುಹೊಂದಾಣಿಕೆ ಅರ್ಜಿ ಸಲ್ಲಿಸಿ.',
+      ],
+      draftReply:
+        'ಗೆ,\nಶಾಖಾ ವ್ಯವಸ್ಥಾಪಕರು,\nಭಾರತೀಯ ಕೋಆಪರೇಟಿವ್ ಬ್ಯಾಂಕ್ ಲಿಮಿಟೆಡ್, ವಾಶಿ ಶಾಖೆ.\n\nವಿಷಯ: ಸಾಲದ ಖಾತೆ [ACCOUNT_01] ಬಾಕಿ ಪಾವತಿ / ಮರುಹೊಂದಾಣಿಕೆ ಕೋರಿಕೆ.\n\nಮಾನ್ಯರೇ,\n\nನಾನು [PERSON_01] (ಖಾತೆ [ACCOUNT_01]). ದಿನಾಂಕ 08 Nov 2026ರ Rs. 19,070.00 ಬಾಕಿ ನೋಟಿಸ್ ಸಂಬಂಧ 30 Nov 2026ರೊಳಗೆ ಶಾಖೆಯನ್ನು ಸಂಪರ್ಕಿಸುತ್ತಿದ್ದೇನೆ.\n\nಸಂಪರ್ಕ: [PHONE_01]\n\nಇಂತಿ,\n[PERSON_01]',
+    },
+    ta: {
+      documentType: 'நிலுவையில் உள்ள தனிநபர் கடன் முதல் நினைவூட்டல் அறிவிப்பு',
+      summary:
+        'பாரதிய கூட்டுறவு வங்கி [PERSON_01] அவர்களுக்கு கடன் கணக்கு [ACCOUNT_01] தொடர்பாக முதல் நினைவூட்டல் அறிவிப்பை அனுப்பியுள்ளது. செப்டம்பர் மற்றும் அக்டோபர் 2026 ஆகிய இரு மாதத் தவணைகள் (தலா Rs. 9,225.00) நிலுவையில் உள்ளன. Rs. 620.00 அபராத வட்டியுடன் மொத்தம் Rs. 19,070.00 தொகையை 30 Nov 2026க்குள் செலுத்த வேண்டும்.',
+      keyFacts: [
+        { label: 'கடன் பெற்றவர்', value: '[PERSON_01]' },
+        { label: 'கடன் கணக்கு', value: '[ACCOUNT_01]' },
+        { label: 'IFSC குறியீடு', value: '[IFSC_01]' },
+        { label: 'PAN', value: '[PAN_01]' },
+      ],
+      deadlines: [
+        {
+          date: '30 Nov 2026',
+          what: 'Rs. 19,070.00 செலுத்த அல்லது கடன் மறுசீரமைப்பு விண்ணப்பம் அளிக்க கடைசி தேதி',
+        },
+      ],
+      amounts: [
+        { value: 'Rs. 9,225.00', what: 'மாதாந்திர தவணை (EMI)' },
+        { value: 'Rs. 18,450.00', what: 'இரண்டு மாத நிலுவைத் தவணை' },
+        { value: 'Rs. 620.00', what: 'அபராதக் கட்டணம்' },
+        { value: 'Rs. 19,070.00', what: 'மொத்த நிலுவைத் தொகை' },
+      ],
+      watchOuts: ['30 Nov 2026க்குப் பிறகும் செலுத்தாமல் இருந்தால் கிரெடிட் பீரோக்களுக்கு புகார் அளிக்கப்படலாம்.'],
+      nextSteps: [
+        'உங்கள் வங்கிக் கணக்கில் இரண்டு EMI தொகைகள் பிடித்தம் செய்யப்படவில்லையா என்பதைச் சரிபார்க்கவும்.',
+        '30 Nov 2026க்கு முன் [ACCOUNT_01] கணக்கில் Rs. 19,070.00 செலுத்தவும் அல்லது வாஷி கிளையில் கடன் மறுசீரமைப்பு கடிதம் வழங்கவும்.',
+      ],
+      draftReply:
+        'பெறுநர்,\nகிளை மேலாளர்,\nபாரதிய கூட்டுறவு வங்கி, வாஷி கிளை.\n\nபொருள்: கடன் கணக்கு [ACCOUNT_01] நிலுவைத் தொகை / மறுசீரமைப்பு கோரிக்கை.\n\nஐயா/அம்மா,\n\nநான் [PERSON_01] (கடன் கணக்கு [ACCOUNT_01]). 08 Nov 2026 தேதியிட்ட Rs. 19,070.00 நிலுவை அறிவிப்பு தொடர்பாக 30 Nov 2026க்குள் கிளையைத் தொடர்பு கொள்கிறேன்.\n\nதொடர்புக்கு: [PHONE_01]\n\nஇப்படிக்கு,\n[PERSON_01]',
+    },
+    te: {
+      documentType: 'గడువు దాటిన వ్యక్తిగత రుణ మొదటి రిమైండర్ నోటీసు',
+      summary:
+        'భారతీయ కోఆపరేటివ్ బ్యాంక్ లిమిటెడ్ [PERSON_01] కు లోన్ ఖాతా [ACCOUNT_01] పై మొదటి రిమైండర్ నోటీసు పంపింది. సెప్టెంబర్ మరియు అక్టోబర్ 2026 నెలల రెండు EMIలు (ఒక్కొక్కటి Rs. 9,225.00) బాకీ ఉన్నాయి. Rs. 620.00 అపరాధ వడ్డీతో కలిపి మొత్తం Rs. 19,070.00 ను 30 Nov 2026 లోపు చెల్లించాలి.',
+      keyFacts: [
+        { label: 'రుణగ్రహీత', value: '[PERSON_01]' },
+        { label: 'లోన్ ఖాతా', value: '[ACCOUNT_01]' },
+        { label: 'IFSC కోడ్', value: '[IFSC_01]' },
+        { label: 'PAN', value: '[PAN_01]' },
+      ],
+      deadlines: [
+        { date: '30 Nov 2026', what: 'Rs. 19,070.00 చెల్లించడానికి లేదా రీస్ట్రక్చరింగ్ దరఖాస్తు ఇవ్వడానికి చివరి తేదీ' },
+      ],
+      amounts: [
+        { value: 'Rs. 9,225.00', what: 'నెలవారీ EMI మొత్తం' },
+        { value: 'Rs. 18,450.00', what: 'రెండు నెలల బాకీ EMI' },
+        { value: 'Rs. 620.00', what: 'అపరాధ ఛార్జీలు (నెలకు 2%)' },
+        { value: 'Rs. 19,070.00', what: 'మొత్తం చెల్లించాల్సిన బాకీ' },
+      ],
+      watchOuts: ['30 Nov 2026 దాటితే క్రెడిట్ బ్యూరోలకు రిపోర్ట్ చేయబడవచ్చు.'],
+      nextSteps: [
+        'సెప్టెంబర్, అక్టోబర్ EMIలు బ్యాంక్ నుండి కట్ అయ్యాయో లేదో స్టేట్‌మెంట్ చూసుకోండి.',
+        '30 Nov 2026 లోపు [ACCOUNT_01] లో Rs. 19,070.00 జమ చేయండి లేదా వాషి బ్రాంచ్‌లో రీస్ట్రక్చరింగ్ దరఖాస్తు ఇవ్వండి.',
+      ],
+      draftReply:
+        'కు,\nబ్రాంచ్ మేనేజర్,\nభారతీయ కోఆపరేటివ్ బ్యాంక్ లిమిటెడ్, వాషి బ్రాంచ్.\n\nవిషయం: లోన్ ఖాతా [ACCOUNT_01] బకాయి చెల్లింపు / రీస్ట్రక్చరింగ్ అభ్యర్థన.\n\nఅయ్యా/అమ్మా,\n\nనేను [PERSON_01] (లోన్ ఖాతా [ACCOUNT_01]). 08 Nov 2026 నోటీసులో పేర్కొన్న Rs. 19,070.00 బకాయి విషయమై 30 Nov 2026 లోపు బ్రాంచ్‌ను సంప్రదిస్తున్నాను.\n\nసంప్రదింపు: [PHONE_01]\n\nఇట్లు,\n[PERSON_01]',
+    },
+  },
+  'rental-agreement': {
+    en: {
+      documentType: 'Residential Leave and License Agreement (11-Month Excerpt)',
+      summary:
+        'This is an 11-month residential rental agreement between landlord [PERSON_01] and tenant [PERSON_02] for the property at [ADDRESS_01], running from 01 Dec 2026 to 31 Oct 2027. Monthly rent is Rs. 24,000.00 due by the 5th of each month, with a refundable security deposit of Rs. 1,20,000.00. Neither side can exit during the first 3 months, after which 60 days written notice is required.',
+      keyFacts: [
+        { label: 'Landlord (Lessor)', value: '[PERSON_01]' },
+        { label: 'Tenant', value: '[PERSON_02]' },
+        { label: 'Agreement Term', value: '11 months (01 Dec 2026 to 31 Oct 2027)' },
+        { label: 'Lock-in & Notice', value: '3-month lock-in; 60 days written notice after' },
+        { label: 'Property Address', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        {
+          date: '01 Dec 2026',
+          what: 'Lease start date (security deposit payable prior to handover)',
+        },
+        { date: '5th of every month', what: 'Monthly rent of Rs. 24,000.00 due' },
+        { date: '31 Oct 2027', what: 'Agreement end date; 5% rent escalation applies on renewal' },
+      ],
+      amounts: [
+        { value: 'Rs. 24,000.00', what: 'Monthly rent (excluding electricity and water)' },
+        { value: 'Rs. 1,20,000.00', what: 'Refundable security deposit (5 months rent)' },
+      ],
+      watchOuts: [
+        'The security deposit is Rs. 1,20,000.00 (5 months of rent), which is higher than the 2-month cap in some state tenancy rules—verify the refund conditions and deductions list before signing.',
+        'There is a strict 3-month lock-in period followed by a 60-day notice requirement.',
+        'Electricity and water charges are not included in Rs. 24,000.00 and must be paid separately.',
+      ],
+      nextSteps: [
+        'Ask [PERSON_01] to add an itemized fixture checklist and exact timeline (e.g., within 15 days of handover) for refunding the Rs. 1,20,000.00 security deposit.',
+        'Confirm payment method and monthly rent receipts for HRA claims before transferring the deposit.',
+        'Keep signed copies of both parties’ ID proofs attached only to the physical executed copy.',
+      ],
+      draftReply:
+        'Dear [PERSON_01],\n\nThank you for sharing the Leave and License Agreement excerpt for [ADDRESS_01] (01 Dec 2026 to 31 Oct 2027). Before we sign and transfer the Rs. 1,20,000.00 security deposit, could we add a brief clause specifying that the deposit will be refunded within 15 days of handing back the keys, along with a joint move-in inspection checklist?\n\nRegards,\n[PERSON_02]\n[PHONE_01] | [EMAIL_01]',
+    },
+    hi: {
+      documentType: 'आवासीय किराया अनुबंध का सारांश (11 माह)',
+      summary:
+        'यह मकान मालिक [PERSON_01] और किरायेदार [PERSON_02] के बीच [ADDRESS_01] स्थित घर के लिए 01 Dec 2026 से 31 Oct 2027 तक का 11 महीने का किराया समझौता है। मासिक किराया Rs. 24,000.00 (हर महीने की 5 तारीख तक देय) और वापसी योग्य सिक्योरिटी डिपॉजिट Rs. 1,20,000.00 है। पहले 3 महीने लॉक-इन अवधि है, उसके बाद 60 दिन का लिखित नोटिस आवश्यक है।',
+      keyFacts: [
+        { label: 'मकान मालिक', value: '[PERSON_01]' },
+        { label: 'किरायेदार', value: '[PERSON_02]' },
+        { label: 'अवधि', value: '01 Dec 2026 से 31 Oct 2027' },
+        { label: 'नोटिस अवधि', value: '3 माह लॉक-इन के बाद 60 दिन' },
+        { label: 'संपत्ति पता', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '01 Dec 2026', what: 'किराया अवधि की शुरुआत' },
+        { date: '31 Oct 2027', what: 'अनुबंध समाप्ति (नवीनीकरण पर 5% वृद्धि)' },
+      ],
+      amounts: [
+        { value: 'Rs. 24,000.00', what: 'मासिक किराया (बिजली-पानी अलग से)' },
+        { value: 'Rs. 1,20,000.00', what: 'वापसी योग्य सिक्योरिटी डिपॉजिट' },
+      ],
+      watchOuts: [
+        'Rs. 1,20,000.00 की सिक्योरिटी राशि 5 महीने के किराये के बराबर है; घर खाली करते समय वापसी की समय-सीमा स्पष्ट लिखवा लें।',
+        'पहले 3 महीने अनुबंध समाप्त नहीं किया जा सकता।',
+      ],
+      nextSteps: [
+        'डिपॉजिट देने से पहले घर के सामान की सूची और डिपॉजिट वापसी की समय-सीमा (जैसे चाबी सौंपने के 15 दिन के भीतर) समझौते में जुड़वाएं।',
+        'किराया रसीद और बैंक ट्रांसफर विवरण सुरक्षित रखें।',
+      ],
+      draftReply:
+        'प्रिय [PERSON_01],\n\n[ADDRESS_01] के किराया समझौते के लिए धन्यवाद। हस्ताक्षर और Rs. 1,20,000.00 सिक्योरिटी डिपॉजिट भेजने से पहले कृपया समझौते में यह स्पष्ट कर दें कि घर खाली करने के 15 दिनों के भीतर डिपॉजिट वापस किया जाएगा।\n\nसादर,\n[PERSON_02]\n[PHONE_01]',
+    },
+    kn: {
+      documentType: 'ವಸತಿ ಬಾಡಿಗೆ ಒಪ್ಪಂದದ ಸಾರಾಂಶ (11 ತಿಂಗಳು)',
+      summary:
+        'ಇದು ಮನೆ ಮಾಲೀಕರಾದ [PERSON_01] ಮತ್ತು ಬಾಡಿಗೆದಾರರಾದ [PERSON_02] ನಡುವೆ [ADDRESS_01] ಮನೆಗಾಗಿ 01 Dec 2026 ರಿಂದ 31 Oct 2027ರವರೆಗಿನ 11 ತಿಂಗಳ ಬಾಡಿಗೆ ಒಪ್ಪಂದವಾಗಿದೆ. ಮಾಸಿಕ ಬಾಡಿಗೆ Rs. 24,000.00 ಮತ್ತು ಭದ್ರತಾ ಠೇವಣಿ Rs. 1,20,000.00 ಆಗಿದೆ. ಮೊದಲ 3 ತಿಂಗಳು ಲಾಕ್-ಇನ್ ಅವಧಿ ಇದ್ದು, ನಂತರ 60 ದಿನಗಳ ಲಿಖಿತ ನೋಟಿಸ್ ಅಗತ್ಯವಿದೆ.',
+      keyFacts: [
+        { label: 'ಮಾಲೀಕರು', value: '[PERSON_01]' },
+        { label: 'ಬಾಡಿಗೆದಾರರು', value: '[PERSON_02]' },
+        { label: 'ಅವಧಿ', value: '01 Dec 2026 ರಿಂದ 31 Oct 2027' },
+        { label: 'ವಿಳಾಸ', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '01 Dec 2026', what: 'ಬಾಡಿಗೆ ಪ್ರಾರಂಭ ದಿನಾಂಕ' },
+        { date: '31 Oct 2027', what: 'ಒಪ್ಪಂದ ಮುಕ್ತಾಯ (ನವೀಕರಣದಲ್ಲಿ 5% ಹೆಚ್ಚಳ)' },
+      ],
+      amounts: [
+        { value: 'Rs. 24,000.00', what: 'ತಿಂಗಳ ಬಾಡಿಗೆ (ವಿದ್ಯುತ್ ಮತ್ತು ನೀರು ಪ್ರತ್ಯೇಕ)' },
+        { value: 'Rs. 1,20,000.00', what: 'ಮರುಪಾವತಿಸಬಹುದಾದ ಭದ್ರತಾ ಠೇವಣಿ' },
+      ],
+      watchOuts: ['Rs. 1,20,000.00 ಠೇವಣಿ ಹಿಂದಿರುಗಿಸುವ ಅವಧಿಯನ್ನು ಒಪ್ಪಂದದಲ್ಲಿ ಸ್ಪಷ್ಟವಾಗಿ ಬರೆಯಿಸಿ.'],
+      nextSteps: ['ಠೇವಣಿ ಪಾವತಿಸುವ ಮೊದಲು ಮನೆ ವಸ್ತುಗಳ ಪಟ್ಟಿ ಮತ್ತು ಠೇವಣಿ ಮರುಪಾವತಿ ನಿಯಮಗಳನ್ನು ಸೇರಿಸಿ.'],
+      draftReply:
+        'ಪ್ರೀತಿಯ [PERSON_01],\n\n[ADDRESS_01] ಬಾಡಿಗೆ ಒಪ್ಪಂದಕ್ಕೆ ಧನ್ಯವಾದಗಳು. Rs. 1,20,000.00 ಭದ್ರತಾ ಠೇವಣಿ ಪಾವತಿಸುವ ಮೊದಲು, ಮನೆ ಖಾಲಿ ಮಾಡಿದ 15 ದಿನಗಳಲ್ಲಿ ಠೇವಣಿ ಮರುಪಾವತಿಸುವ ಷರತ್ತನ್ನು ಸೇರಿಸಬಹುದೇ?\n\nವಂದನೆಗಳೊಂದಿಗೆ,\n[PERSON_02]',
+    },
+    ta: {
+      documentType: 'வீட்டு வாடகை ஒப்பந்தச் சுருக்கம் (11 மாதங்கள்)',
+      summary:
+        'இது வீட்டு உரிமையாளர் [PERSON_01] மற்றும் வாடகைதாரர் [PERSON_02] ஆகியோருக்கு இடையே [ADDRESS_01] முகவரியில் உள்ள வீட்டிற்கான 01 Dec 2026 முதல் 31 Oct 2027 வரையிலான 11 மாத வாடகை ஒப்பந்தம் ஆகும். மாத வாடகை Rs. 24,000.00 மற்றும் பாதுகாப்பு வைப்புத்தொகை Rs. 1,20,000.00 ஆகும். முதல் 3 மாதங்கள் லாக்-இன் காலம்; அதன்பின் 60 நாட்கள் எழுத்துப்பூர்வ அறிவிப்பு தேவை.',
+      keyFacts: [
+        { label: 'உரிமையாளர்', value: '[PERSON_01]' },
+        { label: 'வாடகைதாரர்', value: '[PERSON_02]' },
+        { label: 'ஒப்பந்த காலம்', value: '01 Dec 2026 முதல் 31 Oct 2027' },
+        { label: 'முகவரி', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '01 Dec 2026', what: 'ஒப்பந்தம் தொடங்கும் தேதி' },
+        { date: '31 Oct 2027', what: 'ஒப்பந்தம் முடியும் தேதி (புதுப்பிப்பில் 5% உயர்வு)' },
+      ],
+      amounts: [
+        { value: 'Rs. 24,000.00', what: 'மாத வாடகை (மின்சாரம், தண்ணீர் தனி)' },
+        { value: 'Rs. 1,20,000.00', what: 'திருப்பித் தரக்கூடிய பாதுகாப்பு வைப்புத்தொகை' },
+      ],
+      watchOuts: [
+        'Rs. 1,20,000.00 வைப்புத்தொகை எப்போது திருப்பித் தரப்படும் என்பதை ஒப்பந்தத்தில் தெளிவாகக் குறிப்பிடவும்.',
+      ],
+      nextSteps: [
+        'வைப்புத்தொகை செலுத்தும் முன் வீட்டின் பொருட்கள் பட்டியல் மற்றும் வைப்புத்தொகை திரும்பப் பெறும் காலக்கெடுவை சேர்க்கவும்.',
+      ],
+      draftReply:
+        'அன்புள்ள [PERSON_01],\n\n[ADDRESS_01] வாடகை ஒப்பந்தத்திற்கு நன்றி. Rs. 1,20,000.00 வைப்புத்தொகை செலுத்தும் முன், வீட்டைக் காலி செய்த 15 நாட்களுக்குள் வைப்புத்தொகை திருப்பித் தரப்படும் என்ற நிபந்தனையைச் சேர்க்க முடியுமா?\n\nநன்றி,\n[PERSON_02]',
+    },
+    te: {
+      documentType: 'నివాస అద్దె ఒప్పంద సారాంశం (11 నెలలు)',
+      summary:
+        'ఇది ఇంటి యజమాని [PERSON_01] మరియు అద్దెదారు [PERSON_02] మధ్య [ADDRESS_01] ఇంటికి సంబంధించి 01 Dec 2026 నుండి 31 Oct 2027 వరకు 11 నెలల అద్దె ఒప్పందం. నెలవారీ అద్దె Rs. 24,000.00 మరియు తిరిగి చెల్లించదగిన సెక్యూరిటీ డిపాజిట్ Rs. 1,20,000.00. మొదటి 3 నెలలు లాక్-ఇన్ పీరియడ్ ఉంటుంది, ఆ తర్వాత 60 రోజుల లిఖితపూర్వక నోటీసు అవసరం.',
+      keyFacts: [
+        { label: 'ఇంటి యజమాని', value: '[PERSON_01]' },
+        { label: 'అద్దెదారు', value: '[PERSON_02]' },
+        { label: 'కాలపరిమితి', value: '01 Dec 2026 నుండి 31 Oct 2027' },
+        { label: 'చిరునామా', value: '[ADDRESS_01]' },
+      ],
+      deadlines: [
+        { date: '01 Dec 2026', what: 'ఒప్పందం ప్రారంభ తేదీ' },
+        { date: '31 Oct 2027', what: 'ఒప్పందం ముగింపు తేదీ (రెన్యూవల్‌పై 5% పెంపు)' },
+      ],
+      amounts: [
+        { value: 'Rs. 24,000.00', what: 'నెలవారీ అద్దె (విద్యుత్, నీరు వేరు)' },
+        { value: 'Rs. 1,20,000.00', what: 'సెక్యూరిటీ డిపాజిట్' },
+      ],
+      watchOuts: ['Rs. 1,20,000.00 డిపాజిట్ ఎప్పటిలోపు తిరిగి ఇస్తారో ఒప్పందంలో స్పష్టంగా రాయించుకోండి.'],
+      nextSteps: ['డిపాజిట్ చెల్లించే ముందు ఇంట్లోని వస్తువుల జాబితా మరియు డిపాజిట్ వాపసు నిబంధనలను జత చేయండి.'],
+      draftReply:
+        'ప్రియమైన [PERSON_01] గారికి,\n\n[ADDRESS_01] అద్దె ఒప్పందానికి ధన్యవాదాలు. Rs. 1,20,000.00 డిపాజిట్ బదిలీ చేసే ముందు, ఇల్లు ఖాళీ చేసిన 15 రోజులలోపు డిపాజిట్ వాపసు చేస్తామని ఒప్పందంలో చేర్చగలరా?\n\nధన్యవాదాలతో,\n[PERSON_02]',
+    },
+  },
+  'government-notice': {
+    en: {
+      documentType: 'Social Welfare Scholarship Verification Notice',
+      summary:
+        'The Directorate of Social Welfare has approved a scholarship grant of Rs. 18,500.00 for [PERSON_01] (Application No. [ACCOUNT_01]), but disbursement is currently on hold pending verification. You must submit a self-attested income certificate and institution bonafide letter at the District Welfare Office on or before 10 Dec 2026, or the Rs. 18,500.00 grant for the 2026-27 cycle will lapse.',
+      keyFacts: [
+        { label: 'Applicant', value: '[PERSON_01]' },
+        { label: 'Application Number', value: '[ACCOUNT_01]' },
+        { label: 'Disbursement Bank A/c', value: '[ACCOUNT_02] (IFSC [IFSC_01])' },
+        { label: 'Current Status', value: 'Pending biometric & bank seeding verification' },
+      ],
+      deadlines: [
+        {
+          date: '10 Dec 2026',
+          what: 'Submit self-attested income certificate and institution bonafide letter at District Welfare Office',
+        },
+      ],
+      amounts: [{ value: 'Rs. 18,500.00', what: 'Approved scholarship grant for 2026-27 cycle' }],
+      watchOuts: [
+        'The approval is conditional: if verification documents are not submitted by 10 Dec 2026, the Rs. 18,500.00 grant expires automatically.',
+        'Notice also mentions bank seeding verification — ensure your Aadhaar is seeded (NPCI mapped) to bank account [ACCOUNT_02] at branch [IFSC_01].',
+      ],
+      nextSteps: [
+        'Obtain a signed bonafide student letter from your college/institution and prepare a self-attested copy of your valid income certificate.',
+        'Check with your bank branch ([IFSC_01]) that Aadhaar DBT seeding is active on account [ACCOUNT_02].',
+        'Submit both documents in person at the District Welfare Office well before 10 Dec 2026 and take a stamped acknowledgement slip.',
+      ],
+      draftReply:
+        'To,\nThe District Social Welfare Officer,\nDistrict Welfare Office\n\nSubject: Submission of Verification Documents for Scholarship Application [ACCOUNT_01]\n\nSir/Madam,\n\nI, [PERSON_01] (Application No. [ACCOUNT_01], DOB [DOB_01]), am submitting my self-attested income certificate and institution bonafide letter before the 10 Dec 2026 deadline as requested in your notice dated 06 Nov 2026. Kindly complete biometric and bank seeding verification for my account [ACCOUNT_02] (IFSC [IFSC_01]) so that the approved grant of Rs. 18,500.00 can be disbursed.\n\nContact: [PHONE_01]\n\nYours faithfully,\n[PERSON_01]',
+    },
+    hi: {
+      documentType: 'समाज कल्याण छात्रवृत्ति सत्यापन एवं भुगतान सूचना',
+      summary:
+        'समाज कल्याण निदेशालय ने [PERSON_01] (आवेदन संख्या [ACCOUNT_01]) के लिए Rs. 18,500.00 की छात्रवृत्ति स्वीकृत की है, लेकिन बायोमेट्रिक और बैंक सीडिंग सत्यापन बाकी होने के कारण भुगतान रुका हुआ है। 10 Dec 2026 या उससे पहले जिला कल्याण कार्यालय में स्व-प्रमाणित आय प्रमाण पत्र और संस्थान का बोनाफाइड पत्र जमा करना अनिवार्य है, अन्यथा 2026-27 सत्र की यह राशि समाप्त हो जाएगी।',
+      keyFacts: [
+        { label: 'आवेदक', value: '[PERSON_01]' },
+        { label: 'आवेदन संख्या', value: '[ACCOUNT_01]' },
+        { label: 'बैंक खाता', value: '[ACCOUNT_02] (IFSC [IFSC_01])' },
+        { label: 'स्थिति', value: 'बायोमेट्रिक और बैंक सीडिंग सत्यापन लंबित' },
+      ],
+      deadlines: [
+        {
+          date: '10 Dec 2026',
+          what: 'जिला कल्याण कार्यालय में आय प्रमाण पत्र व बोनाफाइड पत्र जमा करने की अंतिम तिथि',
+        },
+      ],
+      amounts: [{ value: 'Rs. 18,500.00', what: '2026-27 सत्र के लिए स्वीकृत छात्रवृत्ति राशि' }],
+      watchOuts: [
+        '10 Dec 2026 तक दस्तावेज़ जमा न होने पर Rs. 18,500.00 की छात्रवृत्ति स्वतः रद्द हो जाएगी।',
+        'बैंक खाता [ACCOUNT_02] में आधार DBT सीडिंग सक्रिय होना आवश्यक है।',
+      ],
+      nextSteps: [
+        'अपने कॉलेज से बोनाफाइड प्रमाण पत्र और स्व-प्रमाणित आय प्रमाण पत्र की प्रति तैयार करें।',
+        'बैंक शाखा ([IFSC_01]) से सुनिश्चित करें कि खाता [ACCOUNT_02] आधार से सीडेड है।',
+        '10 Dec 2026 से पहले जिला कल्याण कार्यालय में दस्तावेज़ जमा कर पावती रसीद अवश्य लें।',
+      ],
+      draftReply:
+        'सेवा में,\nजिला समाज कल्याण अधिकारी,\nजिला कल्याण कार्यालय।\n\nविषय: छात्रवृत्ति आवेदन संख्या [ACCOUNT_01] के सत्यापन हेतु दस्तावेज़ जमा करने के संबंध में।\n\nमहोदय/महोदया,\n\nमैं [PERSON_01] (आवेदन संख्या [ACCOUNT_01]) 06 Nov 2026 की सूचना के अनुसार 10 Dec 2026 से पहले अपना स्व-प्रमाणित आय प्रमाण पत्र और संस्थान का बोनाफाइड पत्र जमा कर रहा/रही हूँ। कृपया खाता [ACCOUNT_02] (IFSC [IFSC_01]) का सत्यापन पूर्ण कर Rs. 18,500.00 की छात्रवृत्ति जारी करने की कृपा करें।\n\nमोबाइल: [PHONE_01]\n\nभवदीय,\n[PERSON_01]',
+    },
+    kn: {
+      documentType: 'ಸಮಾಜ ಕಲ್ಯಾಣ ವಿದ್ಯಾರ್ಥಿವೇತನ ಪರಿಶೀಲನಾ ಸೂಚನೆ',
+      summary:
+        'ಸಮಾಜ ಕಲ್ಯಾಣ ನಿರ್ದೇಶನಾಲಯವು [PERSON_01] (ಅರ್ಜಿ ಸಂಖ್ಯೆ [ACCOUNT_01]) ಅವರಿಗೆ Rs. 18,500.00 ವಿದ್ಯಾರ್ಥಿವೇತನವನ್ನು ಅನುಮೋದಿಸಿದೆ. ಆದರೆ ಬಯೋಮೆಟ್ರಿಕ್ ಮತ್ತು ಬ್ಯಾಂಕ್ ಸೀಡಿಂಗ್ ಪರಿಶೀಲನೆ ಬಾಕಿ ಇದೆ. 10 Dec 2026ರೊಳಗೆ ಜಿಲ್ಲಾ ಕಲ್ಯಾಣ ಕಚೇರಿಯಲ್ಲಿ ಆದಾಯ ಪ್ರಮಾಣಪತ್ರ ಮತ್ತು ಕಾಲೇಜು ಬೋನಾಫೈಡ್ ಪತ್ರ ಸಲ್ಲಿಸದಿದ್ದರೆ Rs. 18,500.00 ಅನುದಾನ ರದ್ದಾಗುತ್ತದೆ.',
+      keyFacts: [
+        { label: 'ಅರ್ಜಿದಾರರು', value: '[PERSON_01]' },
+        { label: 'ಅರ್ಜಿ ಸಂಖ್ಯೆ', value: '[ACCOUNT_01]' },
+        { label: 'ಬ್ಯಾಂಕ್ ಖಾತೆ', value: '[ACCOUNT_02] (IFSC [IFSC_01])' },
+      ],
+      deadlines: [{ date: '10 Dec 2026', what: 'ದಾಖಲೆಗಳನ್ನು ಸಲ್ಲಿಸಲು ಕೊನೆಯ ದಿನಾಂಕ' }],
+      amounts: [{ value: 'Rs. 18,500.00', what: '2026-27ರ ವಿದ್ಯಾರ್ಥಿವೇತನ ಮೊತ್ತ' }],
+      watchOuts: ['10 Dec 2026ರೊಳಗೆ ದಾಖಲೆ ಸಲ್ಲಿಸದಿದ್ದರೆ ವಿದ್ಯಾರ್ಥಿವೇತನ ರದ್ದಾಗುತ್ತದೆ.'],
+      nextSteps: [
+        'ಆದಾಯ ಪ್ರಮಾಣಪತ್ರ ಮತ್ತು ಬೋನಾಫೈಡ್ ಪತ್ರವನ್ನು ಸಿದ್ಧಪಡಿಸಿ.',
+        'ಖಾತೆ [ACCOUNT_02] (IFSC [IFSC_01]) ಗೆ ಆಧಾರ್ DBT ಸೀಡಿಂಗ್ ಆಗಿದೆಯೇ ಎಂದು ಬ್ಯಾಂಕ್‌ನಲ್ಲಿ ಖಚಿತಪಡಿಸಿ.',
+        '10 Dec 2026ರೊಳಗೆ ಜಿಲ್ಲಾ ಕಲ್ಯಾಣ ಕಚೇರಿಗೆ ಸಲ್ಲಿಸಿ ರಶೀದಿ ಪಡೆಯಿರಿ.',
+      ],
+      draftReply:
+        'ಗೆ,\nಜಿಲ್ಲಾ ಸಮಾಜ ಕಲ್ಯಾಣ ಅಧಿಕಾರಿಗಳು,\nಜಿಲ್ಲಾ ಕಲ್ಯಾಣ ಕಚೇರಿ.\n\nವಿಷಯ: ವಿದ್ಯಾರ್ಥಿವೇತನ ಅರ್ಜಿ [ACCOUNT_01] ದಾಖಲೆಗಳ ಸಲ್ಲಿಕೆ.\n\nಮಾನ್ಯರೇ,\n\nನಾನು [PERSON_01] (ಅರ್ಜಿ [ACCOUNT_01]). 10 Dec 2026ರ ಗಡುವಿನೊಳಗೆ ಆದಾಯ ಪ್ರಮಾಣಪತ್ರ ಮತ್ತು ಬೋನಾಫೈಡ್ ಪತ್ರ ಸಲ್ಲಿಸುತ್ತಿದ್ದೇನೆ. ದಯವಿಟ್ಟು ಖಾತೆ [ACCOUNT_02] ಪರಿಶೀಲಿಸಿ Rs. 18,500.00 ಮಂಜೂರು ಮಾಡಿ.\n\nಇಂತಿ,\n[PERSON_01]',
+    },
+    ta: {
+      documentType: 'சமூக நலத்துறை கல்வி உதவித்தொகை சரிபார்ப்பு அறிவிப்பு',
+      summary:
+        'சமூக நல இயக்குநரகம் [PERSON_01] (விண்ணப்ப எண் [ACCOUNT_01]) அவர்களுக்கு Rs. 18,500.00 கல்வி உதவித்தொகைக்கு ஒப்புதல் அளித்துள்ளது. ஆனால் பயோமெட்ரிக் மற்றும் வங்கி இணைப்பு சரிபார்ப்பு நிலுவையில் உள்ளது. 10 Dec 2026க்குள் வருமானச் சான்றிதழ் மற்றும் கல்லூரி போனாஃபைட் கடிதத்தை மாவட்ட நல அலுவலகத்தில் சமர்ப்பிக்காவிட்டால் Rs. 18,500.00 உதவித்தொகை ரத்தாகிவிடும்.',
+      keyFacts: [
+        { label: 'விண்ணப்பதாரர்', value: '[PERSON_01]' },
+        { label: 'விண்ணப்ப எண்', value: '[ACCOUNT_01]' },
+        { label: 'வங்கிக் கணக்கு', value: '[ACCOUNT_02] (IFSC [IFSC_01])' },
+      ],
+      deadlines: [{ date: '10 Dec 2026', what: 'ஆவணங்களைச் சமர்ப்பிக்க கடைசி தேதி' }],
+      amounts: [{ value: 'Rs. 18,500.00', what: '2026-27 கல்வி உதவித்தொகை' }],
+      watchOuts: ['10 Dec 2026க்குள் ஆவணங்கள் சமர்ப்பிக்காவிட்டால் உதவித்தொகை தானாகவே காலாவதியாகிவிடும்.'],
+      nextSteps: [
+        'சுயசான்றொப்பமிட்ட வருமானச் சான்றிதழ் மற்றும் கல்லூரி போனாஃபைட் கடிதம் தயார் செய்யவும்.',
+        'கணக்கு [ACCOUNT_02] (IFSC [IFSC_01]) ஆதார் DBT இணைப்பில் உள்ளதா என்பதை வங்கியில் உறுதி செய்யவும்.',
+        '10 Dec 2026க்கு முன் மாவட்ட நல அலுவலகத்தில் நேரில் வழங்கி ஒப்புகைச் சீட்டு பெறவும்.',
+      ],
+      draftReply:
+        'பெறுநர்,\nமாவட்ட சமூக நல அலுவலர்,\nமாவட்ட நல அலுவலகம்.\n\nபொருள்: கல்வி உதவித்தொகை விண்ணப்பம் [ACCOUNT_01] சரிபார்ப்பு ஆவணங்கள்.\n\nஐயா/அம்மா,\n\nநான் [PERSON_01] (விண்ணப்ப எண் [ACCOUNT_01]). 10 Dec 2026 காலக்கெடுவிற்குள் எனது வருமானச் சான்றிதழ் மற்றும் போனாஃபைட் கடிதத்தைச் சமர்ப்பிக்கிறேன். கணக்கு [ACCOUNT_02] சரிபார்த்து Rs. 18,500.00 வழங்க வேண்டுகிறேன்.\n\nஇப்படிக்கு,\n[PERSON_01]',
+    },
+    te: {
+      documentType: 'సాంఘిక సంక్షేమ స్కాలర్‌షిప్ ధృవీకరణ నోటీసు',
+      summary:
+        'సాంఘిక సంక్షేమ డైరెక్టరేట్ [PERSON_01] (దరఖాస్తు సంఖ్య [ACCOUNT_01]) కు Rs. 18,500.00 స్కాలర్‌షిప్‌ను ఆమోదించింది. అయితే బయోమెట్రిక్ మరియు బ్యాంక్ సీడింగ్ ధృవీకరణ పెండింగ్‌లో ఉంది. 10 Dec 2026 లోపు జిల్లా సంక్షేమ కార్యాలయంలో ఆదాయ ధృవీకరణ పత్రం మరియు కాలేజీ బోనఫైడ్ లేఖ సమర్పించకపోతే Rs. 18,500.00 మంజూరు రద్దవుతుంది.',
+      keyFacts: [
+        { label: 'దరఖాస్తుదారు', value: '[PERSON_01]' },
+        { label: 'దరఖాస్తు సంఖ్య', value: '[ACCOUNT_01]' },
+        { label: 'బ్యాంక్ ఖాతా', value: '[ACCOUNT_02] (IFSC [IFSC_01])' },
+      ],
+      deadlines: [{ date: '10 Dec 2026', what: 'ధృవీకరణ పత్రాలు సమర్పించడానికి చివరి తేదీ' }],
+      amounts: [{ value: 'Rs. 18,500.00', what: '2026-27 స్కాలర్‌షిప్ మొత్తం' }],
+      watchOuts: ['10 Dec 2026 లోపు పత్రాలు ఇవ్వకపోతే Rs. 18,500.00 గ్రాంట్ రద్దవుతుంది.'],
+      nextSteps: [
+        'స్వీయ ధృవీకరించిన ఆదాయ సర్టిఫికెట్ మరియు కాలేజీ బోనఫైడ్ లేఖ సిద్ధం చేయండి.',
+        'ఖాతా [ACCOUNT_02] (IFSC [IFSC_01]) కు ఆధార్ సీడింగ్ జరిగిందో లేదో బ్యాంక్‌లో చూసుకోండి.',
+        '10 Dec 2026 లోపు జిల్లా సంక్షేమ కార్యాలయంలో సమర్పించి రసీదు తీసుకోండి.',
+      ],
+      draftReply:
+        'కు,\nజిల్లా సాంఘిక సంక్షేమ అధికారి,\nజిల్లా సంక్షేమ కార్యాలయం.\n\nవిషయం: స్కాలర్‌షిప్ దరఖాస్తు [ACCOUNT_01] ధృవీకరణ పత్రాల సమర్పణ.\n\nఅయ్యా/అమ్మా,\n\nనేను [PERSON_01] (దరఖాస్తు సంఖ్య [ACCOUNT_01]). 10 Dec 2026 గడువులోపు ఆదాయ ధృవీకరణ పత్రం మరియు బోనఫైడ్ లేఖ సమర్పిస్తున్నాను. దయచేసి ఖాతా [ACCOUNT_02] పరిశీలించి Rs. 18,500.00 మంజూరు చేయగలరు.\n\nఇట్లు,\n[PERSON_01]',
+    },
+  },
+};
+
+async function main(): Promise<void> {
+  const publicDir = path.resolve(process.cwd(), 'public/samples');
+  const fixturesDir = path.resolve(process.cwd(), 'fixtures');
+  const fixtureTextDir = path.join(fixturesDir, 'samples');
+
+  fs.mkdirSync(publicDir, { recursive: true });
+  fs.mkdirSync(fixtureTextDir, { recursive: true });
+
+  for (const spec of SAMPLE_SPECS) {
+    const outPublic = path.join(publicDir, spec.filename);
+    const fullText = spec.lines.join('\n');
+
+    if (spec.kind === 'pdf') {
+      await buildPdf(spec.lines, outPublic);
+    } else {
+      await buildPhotoPng(spec.lines, outPublic);
+    }
+
+    fs.writeFileSync(path.join(fixtureTextDir, `${spec.id}.txt`), fullText, 'utf8');
+
+    const vault = new SessionVault();
+    const findings = detectPII(fullText, vault);
+    const redacted = redactText(fullText, findings);
+    const before = computePrivacyScore(fullText);
+    const after = computePrivacyScore(redacted);
+
+    console.log(
+      `[sample:${spec.id}] findings=${findings.length} score=${before.score}->${after.score} tokens=${findings
+        .map((f) => f.token)
+        .join(', ')}`
+    );
+
+    const remainingHigh = detectPII(redacted).filter((f) => f.severity === 'high');
+    if (remainingHigh.length > 0) {
+      throw new Error(
+        `Sample ${spec.id} still has high-severity findings after redaction: ${JSON.stringify(remainingHigh)}`
+      );
+    }
+
+    // Validate all pre-generated language responses against Zod schema
+    const responsesForDoc = SAMPLE_RESPONSES[spec.id];
+    if (!responsesForDoc) {
+      throw new Error(`Missing SAMPLE_RESPONSES for ${spec.id}`);
+    }
+    for (const [lang, payload] of Object.entries(responsesForDoc)) {
+      ExplainResponseSchema.parse(payload);
+      // Verify all [TOKEN_NN] placeholders in the English response actually exist in vault
+      const tokensInSummary = payload.summary.match(/\[[A-Z]+_\d{2}\]/g) ?? [];
+      for (const tok of tokensInSummary) {
+        if (!vault.hasToken(tok)) {
+          throw new Error(
+            `Sample ${spec.id} (${lang}) references token ${tok}, which is not in vault: ${vault
+              .entries()
+              .map((e) => e.token)
+              .join(', ')}`
+          );
+        }
+      }
+    }
+  }
+
+  fs.writeFileSync(
+    path.join(fixturesDir, 'sample-responses.json'),
+    JSON.stringify(SAMPLE_RESPONSES, null, 2),
+    'utf8'
+  );
+  console.log(
+    'Generated public/samples/*, fixtures/samples/*.txt, and fixtures/sample-responses.json'
+  );
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
